@@ -1,10 +1,9 @@
-// === Trace — Main Entry Point (v2) ===
+// === Trace — Main Entry Point (v4: Layer Architecture) ===
 
 import './style.css';
 import { state, subscribe } from './state';
 import { createWelcomeScreen } from './ui/welcome';
 import { createNavbar } from './ui/navbar';
-import { createModeNav, renderModeLinks } from './ui/modeNav';
 import { createPanel, renderPanelContent } from './ui/panel';
 import { initCompositor, startRenderLoop, exportCanvas } from './render/compositor';
 import { initStickers } from './core/stickers';
@@ -13,8 +12,7 @@ import { el } from './ui/dom';
 const app = document.getElementById('app')!;
 
 let editorMounted = false;
-let modeNavEl: HTMLElement | null = null;
-let panelEl: HTMLElement | null = null;
+let panelWrapperEl: HTMLElement | null = null;
 
 function mountApp(): void {
   app.innerHTML = '';
@@ -30,8 +28,7 @@ function mountApp(): void {
 function mountEditor(): void {
   if (editorMounted) {
     // Just update dynamic parts
-    if (modeNavEl) renderModeLinks(modeNavEl);
-    if (panelEl) renderPanelContent(panelEl);
+    if (panelWrapperEl) renderPanelContent(panelWrapperEl);
     return;
   }
 
@@ -49,20 +46,16 @@ function mountEditor(): void {
   canvasContainer.appendChild(canvasEl);
   editorWrapper.appendChild(canvasContainer);
 
-  // Mode nav
-  modeNavEl = createModeNav();
-  editorWrapper.appendChild(modeNavEl);
-
-  // Panel
-  panelEl = createPanel();
-  editorWrapper.appendChild(panelEl);
+  // Panel wrapper (contains popup panel + toolbar)
+  panelWrapperEl = createPanel();
+  editorWrapper.appendChild(panelWrapperEl);
 
   app.appendChild(editorWrapper);
 
   // Init compositor
   initCompositor(canvasEl);
   startRenderLoop();
-  renderPanelContent(panelEl);
+  renderPanelContent(panelWrapperEl);
 
   editorMounted = true;
 }
@@ -75,8 +68,7 @@ subscribe(() => {
     mountApp();
   } else {
     // Update existing editor
-    if (modeNavEl) renderModeLinks(modeNavEl);
-    if (panelEl) renderPanelContent(panelEl);
+    if (panelWrapperEl) renderPanelContent(panelWrapperEl);
   }
 });
 

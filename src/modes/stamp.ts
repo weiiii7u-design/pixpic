@@ -3,6 +3,7 @@
 
 import { state } from '../state';
 import { getStickerAsset, getStickerDimensions, createEffectCanvas } from '../core/stickers';
+import { getStickerDisplayScale } from '../render/compositor';
 import type { DrawArea, StickerInstance } from '../types';
 
 /** Convert sticker's normalized canvas coords to canvas pixel coords */
@@ -48,10 +49,14 @@ function drawStickerArtwork(
   const asset = getStickerAsset(sticker.assetId);
   if (!asset) return;
 
+  // When rendering on screen (sizeScale===1), apply display scale so stickers
+  // shrink proportionally when the canvas shrinks (panel open).
+  const displayScale = sizeScale === 1 ? getStickerDisplayScale() : 1;
+
   const { width, height } = getStickerDimensions(sticker.assetId, sticker.scale);
-  const w = width * sizeScale;
-  const h = height * sizeScale;
-  const unitSize = sticker.effectUnitSize * sizeScale;
+  const w = width * sizeScale * displayScale;
+  const h = height * sizeScale * displayScale;
+  const unitSize = sticker.effectUnitSize * sizeScale * displayScale;
 
   const px = sticker.x * canvasW;
   const py = sticker.y * canvasH;
@@ -77,7 +82,10 @@ function drawStickerControls(
   canvasW: number,
   canvasH: number
 ): void {
-  const { width, height } = getStickerDimensions(sticker.assetId, sticker.scale);
+  const displayScale = getStickerDisplayScale();
+  const { width: rawW, height: rawH } = getStickerDimensions(sticker.assetId, sticker.scale);
+  const width = rawW * displayScale;
+  const height = rawH * displayScale;
   const { px, py } = stickerToCanvas(sticker, canvasW, canvasH);
 
   ctx.save();
@@ -91,16 +99,122 @@ function drawStickerControls(
   ctx.strokeRect(-width / 2, -height / 2, width, height);
   ctx.setLineDash([]);
 
+  // Corner handles layout:
+  //  [×  delete]  ───────  [编辑 edit]
+  //  |                              |
+  //  |                              |
+  //  [⊘ subjectAvoid]  ─────  [↻ rotate]
+
+  // Top-right: resize handle
   const hs = 10;
   ctx.fillStyle = '#2B2BD4';
   ctx.strokeStyle = '#ffffff';
   ctx.lineWidth = 2;
-  for (const [hx, hy] of [[-width / 2, -height / 2], [width / 2, -height / 2], [width / 2, height / 2], [-width / 2, height / 2]]) {
-    ctx.beginPath();
-    ctx.roundRect(hx - hs / 2, hy - hs / 2, hs, hs, 3);
-    ctx.fill();
-    ctx.stroke();
-  }
+  ctx.beginPath();
+  ctx.roundRect(width / 2 - hs / 2, -height / 2 - hs / 2, hs, hs, 3);
+  ctx.fill();
+  ctx.stroke();
+
+  // Delete button — top-left corner (× icon in circle)
+  const btnR = 12;
+  const delX = -width / 2;
+  const delY = -height / 2;
+
+  ctx.beginPath();
+  ctx.arc(delX, delY, btnR, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  const crossSize = 5;
+  ctx.beginPath();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.moveTo(delX - crossSize, delY - crossSize);
+  ctx.lineTo(delX + crossSize, delY + crossSize);
+  ctx.moveTo(delX + crossSize, delY - crossSize);
+  ctx.lineTo(delX - crossSize, delY + crossSize);
+  ctx.stroke();
+
+  // Edit button — top-right corner (pill with "编辑" text)
+  const editX = width / 2;
+  const editY = -height / 2;
+  const pillW = 36;
+  const pillH = 20;
+  const pillR = pillH / 2;
+
+  ctx.beginPath();
+  ctx.roundRect(editX - pillW / 2, editY - pillH / 2, pillW, pillH, pillR);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '600 10px "Plus Jakarta Sans", -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('编辑', editX, editY);
+
+  // Subject avoid button — bottom-left corner (circle, blue when active)
+  const avoidX = -width / 2;
+  const avoidY = height / 2;
+  const isAvoidOn = sticker.subjectAvoid;
+
+  ctx.beginPath();
+  ctx.arc(avoidX, avoidY, btnR, 0, Math.PI * 2);
+  ctx.fillStyle = isAvoidOn ? '#2B2BD4' : 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Draw a person icon (simplified)
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.fillStyle = '#ffffff';
+  // Head
+  ctx.beginPath();
+  ctx.arc(avoidX, avoidY - 4, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  // Body
+  ctx.beginPath();
+  ctx.moveTo(avoidX, avoidY - 1.5);
+  ctx.lineTo(avoidX, avoidY + 4);
+  ctx.moveTo(avoidX - 3.5, avoidY + 1);
+  ctx.lineTo(avoidX + 3.5, avoidY + 1);
+  ctx.stroke();
+
+  // Rotate handle — bottom-right corner (circle with ↻ icon)
+  const rotX = width / 2;
+  const rotY = height / 2;
+
+  ctx.beginPath();
+  ctx.arc(rotX, rotY, btnR, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Draw rotate arrow icon
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.arc(rotX, rotY, 5, -Math.PI * 0.8, Math.PI * 0.5);
+  ctx.stroke();
+  // Arrowhead
+  const arrowTip = Math.PI * 0.5;
+  const ax = rotX + 5 * Math.cos(arrowTip);
+  const ay = rotY + 5 * Math.sin(arrowTip);
+  ctx.beginPath();
+  ctx.moveTo(ax - 3, ay - 1);
+  ctx.lineTo(ax, ay);
+  ctx.lineTo(ax + 1, ay - 3);
+  ctx.stroke();
 
   ctx.restore();
 }

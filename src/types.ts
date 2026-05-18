@@ -1,18 +1,19 @@
-// === Trace — Type Definitions (v3: Partial / Full / Stamp) ===
+// === Trace — Type Definitions (v4: Layer Architecture) ===
 
-export type AppMode = 'partial' | 'full' | 'stamp';
+// --- Editor ---
+export type EditorTool = 'none' | 'adjust' | 'sticker' | 'canvas';
+export type EffectMode = 'off' | 'partial' | 'full';
 
-// --- Partial Mode: ASCII on part of the photo ---
+// --- Partial Effect ---
 export type PartialTarget = 'auto' | 'brush';
 export type EffectType = 'ascii' | 'symbols';
 
-// --- Full Mode: Entire photo becomes ASCII ---
+// --- Full Effect ---
 export type BackgroundMode = 'solid' | 'gradient' | 'transparent';
 
 // --- Shared ---
 export type ColorMode = 'original' | 'mono' | 'multi';
 export type CharsetName = 'standard' | 'shades' | 'dots' | 'steps' | 'numbers' | 'complex';
-export type PanelTab = 'style' | 'adjust';
 export type CanvasRatio = 'original' | '1:1' | '4:5' | '3:4' | '9:16' | '16:9' | '4:3';
 
 // --- Symbol Sets ---
@@ -26,12 +27,12 @@ export interface SymbolSet {
 export interface PartialConfig {
   target: PartialTarget;
   effect: EffectType;
-  colorMode: ColorMode;         // mono / multi / original
-  monoColor: string;            // hex color when mono
-  palette: string;              // palette id when multi
-  density: number;              // 10-80, grid columns
-  size: number;                 // 50-200, char size as % of cell
-  glow: number;                 // 0-40, glow blur radius
+  colorMode: ColorMode;
+  monoColor: string;
+  palette: string;
+  density: number;
+  size: number;
+  glow: number;
   charset: CharsetName;
   symbolSetId: string;
   invert: boolean;
@@ -41,32 +42,32 @@ export interface PartialConfig {
 export interface FullConfig {
   colorMode: ColorMode;
   monoColor: string;
-  background: BackgroundMode;   // what replaces the photo
-  bgColor: string;              // for solid background
-  bgGradient: [string, string]; // for gradient background
-  bgGradientDirection: number;  // degrees
-  density: number;              // 10-80
-  brightness: number;           // -100 to 100
-  contrast: number;             // -100 to 100
+  background: BackgroundMode;
+  bgColor: string;
+  bgGradient: [string, string];
+  bgGradientDirection: number;
+  density: number;
+  brightness: number;
+  contrast: number;
   charset: CharsetName;
-  glow: number;                 // 0-20
+  glow: number;
 }
 
-// --- Sticker Render Mode ---
+// --- Sticker ---
 export type StickerMode = 'dots' | 'ascii';
 
-// --- Sticker Instance ---
 export interface StickerInstance {
   id: string;
-  assetId: string;        // references StickerAsset.id
-  x: number;              // pixel x on canvas
-  y: number;              // pixel y on canvas
+  assetId: string;
+  x: number;
+  y: number;
   scale: number;
-  rotation: number;       // degrees
+  rotation: number;
   color: string;
   mode: StickerMode;
-  opacity: number;        // 0-1
+  opacity: number;
   effectUnitSize: number;
+  subjectAvoid: boolean;
 }
 
 // --- Draw Area ---
@@ -80,8 +81,8 @@ export interface DrawArea {
 // --- App State ---
 export interface AppState {
   screen: 'welcome' | 'editor';
-  mode: AppMode;
-  panelTab: PanelTab;
+  activeTool: EditorTool;       // which tool panel is open
+  effectMode: EffectMode;       // bottom layer effect (off / partial / full)
 
   sourceImage: HTMLImageElement | null;
   imageFileName: string;
@@ -89,36 +90,42 @@ export interface AppState {
   partial: PartialConfig;
   full: FullConfig;
 
-  // Stamp
+  // Stickers (always present, layered on top of effects)
   stickers: StickerInstance[];
   selectedStickerId: string | null;
   stampOpacity: number;
   stickerMode: StickerMode;
   stickerPalette: string;
+  stickerColor: string;           // current selected color for stickers
+  customColors: string[];         // user-saved custom colors
   stickerLibraryTab: string;
-  alignGuides: { h: boolean; v: boolean };  // alignment guide lines visible
-  subjectAvoid: boolean;                    // stickers avoid subject
+  stickerEditOnly: boolean;       // true = show only adjust controls (no library)
+  alignGuides: { h: boolean; v: boolean };
+  subjectAvoid: boolean;
 
   // Masks
-  subjectMask: boolean[] | null;    // AI-detected subject
-  brushMask: boolean[] | null;      // user-painted area (partial brush mode)
-  eraserMask: boolean[] | null;     // erased areas
+  subjectMask: boolean[] | null;
+  brushMask: boolean[] | null;
+  eraserMask: boolean[] | null;
 
   // Tools
   eraserActive: boolean;
   brushActive: boolean;
   brushSize: number;
   eraserSize: number;
+  adjustParam: string;           // currently selected adjust parameter icon
   subjectLoading: boolean;
   subjectError: string | null;
 
   // Canvas
   canvasRatio: CanvasRatio;
-  photoX: number;         // photo center X in canvas (0~1, 0.5=centered)
-  photoY: number;         // photo center Y in canvas (0~1, 0.5=centered)
-  photoScale: number;     // 1 = longest edge fills canvas
+  photoX: number;
+  photoY: number;
+  photoScale: number;
   canvasWidth: number;
   canvasHeight: number;
+  canvasBgPalette: string;
+  canvasBgColor: string;
 }
 
 export interface RenderContext {

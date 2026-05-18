@@ -1,4 +1,4 @@
-// === Trace — Global Reactive State (v3: Partial / Full / Stamp) ===
+// === Trace — Global Reactive State (v4: Layer Architecture) ===
 
 import type { AppState, PartialConfig, FullConfig, CanvasRatio } from './types';
 
@@ -8,8 +8,8 @@ const listeners: Listener[] = [];
 
 export const state: AppState = {
   screen: 'welcome',
-  mode: 'partial',
-  panelTab: 'style',
+  activeTool: 'none',
+  effectMode: 'off',
 
   sourceImage: null,
   imageFileName: '',
@@ -46,8 +46,11 @@ export const state: AppState = {
   selectedStickerId: null,
   stampOpacity: 100,
   stickerMode: 'dots',
-  stickerPalette: 'dream',
+  stickerPalette: 'photo',
+  stickerColor: '',
+  customColors: [],
   stickerLibraryTab: '边框',
+  stickerEditOnly: false,
   alignGuides: { h: false, v: false },
   subjectAvoid: false,
 
@@ -59,6 +62,7 @@ export const state: AppState = {
   brushActive: true,
   brushSize: 30,
   eraserSize: 30,
+  adjustParam: 'density',
   subjectLoading: false,
   subjectError: null,
 
@@ -68,6 +72,8 @@ export const state: AppState = {
   photoScale: 1,
   canvasWidth: 0,
   canvasHeight: 0,
+  canvasBgPalette: 'dream',
+  canvasBgColor: '',
 };
 
 export function subscribe(fn: Listener): () => void {
@@ -79,9 +85,7 @@ export function subscribe(fn: Listener): () => void {
 }
 
 export function notify(): void {
-  for (const fn of listeners) {
-    fn();
-  }
+  for (const fn of listeners) fn();
 }
 
 export function updateState(partial: Partial<AppState>): void {

@@ -1,7 +1,7 @@
 // === Trace — Partial Mode (ASCII on part of photo, using AI subject detection) ===
 
 import { state, updateState } from '../state';
-import { renderAsciiRegion, getCharset } from '../core/ascii';
+import { getCharset } from '../core/ascii';
 import { renderSymbolsGrid } from '../core/symbols';
 import { segmentSubject } from '../core/segmentation';
 import { getPalette } from '../core/shapes';
@@ -175,36 +175,67 @@ function renderPartialAscii(
     // Multi-color: render ASCII with random palette colors per character
     renderMultiColorAscii(ctx, sourceImg, drawArea, mask);
   } else {
-    // Mono or Original
-    let effectiveColorMode: 'bw' | 'matrix' | 'amber' | 'colored';
-    if (partial.colorMode === 'original') {
-      effectiveColorMode = 'colored';
-    } else {
-      if (partial.monoColor === '#00ff41') effectiveColorMode = 'matrix';
-      else if (partial.monoColor === '#ffb000') effectiveColorMode = 'amber';
-      else effectiveColorMode = 'bw';
-    }
-
-    renderAsciiRegion(
-      ctx,
-      sourceImg,
-      mask,
-      state.eraserMask,
-      {
-        density: partial.density,
-        size: partial.size,
-        brightness: 0,
-        contrast: 0,
-        threshold: 0,
-        gamma: 1.0,
-        charset: partial.charset,
-        colorMode: effectiveColorMode,
-        glow: partial.glow,
-        invert: false,
-      },
-      drawArea
-    );
+    // Mono: always use monoColor directly via custom rendering
+    renderMonoColorAscii(ctx, sourceImg, drawArea, mask);
   }
+}
+
+/** Render ASCII in a single user-chosen color */
+function renderMonoColorAscii(
+  ctx: CanvasRenderingContext2D,
+  sourceImg: HTMLImageElement,
+  drawArea: DrawArea,
+  mask: boolean[] | null
+): void {
+  const { partial } = state;
+  const chars = getCharset(partial.charset);
+
+  const cols = partial.density;
+  const cellW = drawArea.w / cols;
+  const cellH = cellW * 1.8;
+  const rows = Math.floor(drawArea.h / cellH);
+
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = cols;
+  sampleCanvas.height = rows;
+  const sCtx = sampleCanvas.getContext('2d')!;
+  sCtx.drawImage(sourceImg, 0, 0, cols, rows);
+  const imageData = sCtx.getImageData(0, 0, cols, rows);
+  const pixels = imageData.data;
+
+  if (partial.glow > 0) {
+    ctx.shadowBlur = partial.glow;
+    ctx.shadowColor = partial.monoColor;
+  }
+
+  const sizeScale = (partial.size || 100) / 100;
+  const fontSize = Math.max(cellW * 1.2 * sizeScale, 4);
+  ctx.font = `${fontSize}px "IBM Plex Mono", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = partial.monoColor;
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const idx = row * cols + col;
+      if (mask !== null && !mask[idx]) continue;
+      if (state.eraserMask !== null && state.eraserMask[idx]) continue;
+
+      const pixIdx = idx * 4;
+      const r = pixels[pixIdx], g = pixels[pixIdx + 1], b = pixels[pixIdx + 2];
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+
+      const charIdx = Math.floor(lum * (chars.length - 1));
+      const char = chars[charIdx] || ' ';
+      if (char === ' ') continue;
+
+      const cx = drawArea.x + col * cellW + cellW / 2;
+      const cy = drawArea.y + row * cellH + cellH / 2;
+      ctx.fillText(char, cx, cy);
+    }
+  }
+
+  ctx.shadowBlur = 0;
 }
 
 /** Render ASCII characters with random colors from a palette */

@@ -126,8 +126,10 @@ export function createChipGroup(
   onChange: (v: string) => void
 ): HTMLElement {
   const wrapper = el('div', { className: 'control-chips' });
-  const labelEl = el('div', { className: 'control-label' }, [label]);
-  wrapper.appendChild(labelEl);
+  if (label) {
+    const labelEl = el('div', { className: 'control-label' }, [label]);
+    wrapper.appendChild(labelEl);
+  }
 
   const chipRow = el('div', { className: 'chip-row' });
   for (const opt of options) {

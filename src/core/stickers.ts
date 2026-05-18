@@ -33,17 +33,36 @@ export const LIBRARY_GROUPS: LibraryGroup[] = [
   {
     name: '边框',
     sections: [
-      { title: '巴洛克', categories: ['边框'] },
-      { title: '酸性', categories: ['酸性'] },
+      { title: '边框', categories: ['边框', '酸性'] },
     ],
   },
   {
-    name: '图案',
+    name: '花束',
     sections: [
       { title: '花束', categories: ['花束'] },
+    ],
+  },
+  {
+    name: '植物',
+    sections: [
       { title: '植物', categories: ['单个植物'] },
+    ],
+  },
+  {
+    name: '动物',
+    sections: [
       { title: '动物', categories: ['动物'] },
+    ],
+  },
+  {
+    name: 'Y2k',
+    sections: [
       { title: 'Y2k', categories: ['Y2k'] },
+    ],
+  },
+  {
+    name: '装饰',
+    sections: [
       { title: '装饰', categories: ['装饰元素'] },
     ],
   },
@@ -51,9 +70,7 @@ export const LIBRARY_GROUPS: LibraryGroup[] = [
 
 // Assets that should override their library placement
 const LIBRARY_SECTION_OVERRIDES: Record<string, { group: string; section: string }> = {
-  'asset-05': { group: '图案', section: '巴洛克' },
-  'asset-11': { group: '图案', section: '巴洛克' },
-  'asset-32': { group: '图案', section: '花束' },
+  'asset-32': { group: '花束', section: '花束' },
 };
 
 // Default scales for specific assets (tuned for 1080px canvas in prototype)
@@ -66,7 +83,7 @@ const DEFAULT_SCALES: Record<string, number> = {
 const LARGE_ASSET_IDS = new Set(['asset-04', 'asset-08', 'asset-10', 'asset-22', 'asset-24', 'asset-26']);
 const BOTTOM_ASSET_IDS = new Set(['asset-15']);
 
-const EFFECT_UNIT_RATIO = 0.003;
+const EFFECT_UNIT_RATIO = 0.0038;
 const BASE_DISPLAY_SIZE = 330; // prototype baseline at 1080px canvas
 
 // === State ===
@@ -169,41 +186,29 @@ export function getStickerDimensions(assetId: string, scale: number): { width: n
 }
 
 /**
- * Scale for manually added stickers — elegant, not overwhelming.
- * Sticker should be ~20-30% of canvas height for small items,
- * frames/borders contain-fit to ~60% height.
+ * Scale for manually added stickers.
+ * Borders: 95% of photo height, or 95% photo width if overflow.
+ * Others: large and prominent (~60% of canvas).
  */
-export function getDefaultScale(asset: StickerAsset, canvasW: number, canvasH: number): number {
+export function getDefaultScale(asset: StickerAsset, canvasW: number, canvasH: number, photoW?: number, photoH?: number): number {
   const maxDim = Math.max(asset.image.width, asset.image.height);
   const baseScale = BASE_DISPLAY_SIZE / maxDim;
   const baseW = asset.image.width * baseScale;
   const baseH = asset.image.height * baseScale;
 
-  // Borders: height = 90% canvas, if width overflows then width = 90% canvas
-  if (asset.category === '边框') {
-    const scaleByH = (canvasH * 0.9) / baseH;
-    if (baseW * scaleByH > canvasW * 0.9) {
-      return (canvasW * 0.9) / baseW;
+  // Borders + Acid: height = 95% photo, if width overflows photo then width = 95% photo
+  if (asset.category === '边框' || asset.category === '酸性') {
+    const pw = (photoW && photoW > 0) ? photoW : canvasW;
+    const ph = (photoH && photoH > 0) ? photoH : canvasH;
+    const scaleByH = (ph * 0.95) / baseH;
+    if (baseW * scaleByH > pw) {
+      return (pw * 0.95) / baseW;
     }
     return scaleByH;
   }
 
-  // Acid: tall, ~70% canvas height
-  if (asset.category === '酸性') return (canvasH * 0.7) / baseH;
-
-  // Bottom items: 60% width
-  if (BOTTOM_ASSET_IDS.has(asset.id)) return (canvasW * 0.6) / baseW;
-
-  // Named defaults (from prototype, but scaled to current canvas)
-  if (DEFAULT_SCALES[asset.id]) {
-    // Prototype was 1080px; scale proportionally
-    const refScale = DEFAULT_SCALES[asset.id];
-    const canvasFactor = Math.min(canvasW, canvasH) / 1080;
-    return refScale * canvasFactor;
-  }
-
-  // Small decorative items: ~25% of shortest canvas dimension
-  const targetSize = Math.min(canvasW, canvasH) * 0.25;
+  // All other stickers: ~60% of shortest canvas dimension
+  const targetSize = Math.min(canvasW, canvasH) * 0.6;
   return targetSize / BASE_DISPLAY_SIZE;
 }
 
@@ -250,7 +255,7 @@ export function getEffectUnitSize(canvasW: number, canvasH: number): number {
 
 let photoPaletteCache: { src: string; colors: string[] } | null = null;
 
-/** Extract 6 dominant colors from an image using k-means-style quantization */
+/** Extract 6 vibrant, high-saturation colors from an image that look good as overlays */
 export function extractPhotoPalette(img: HTMLImageElement): string[] {
   if (photoPaletteCache && photoPaletteCache.src === img.src) return photoPaletteCache.colors;
 
@@ -263,57 +268,110 @@ export function extractPhotoPalette(img: HTMLImageElement): string[] {
   ctx.drawImage(img, 0, 0, size, size);
   const data = ctx.getImageData(0, 0, size, size).data;
 
-  // Collect all pixel colors into buckets (simple median-cut quantization)
-  const pixels: [number, number, number][] = [];
+  // Convert pixels to HSL and score them
+  interface PixelHSL { r: number; g: number; b: number; h: number; s: number; l: number; score: number; }
+  const pixels: PixelHSL[] = [];
+
   for (let i = 0; i < data.length; i += 4) {
-    // Skip very dark and very bright pixels
     const r = data[i], g = data[i + 1], b = data[i + 2];
-    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-    if (lum > 20 && lum < 240) {
-      pixels.push([r, g, b]);
-    }
+    const { h, s, l } = rgbToHsl(r, g, b);
+
+    // Skip very dark, very bright, or very desaturated pixels
+    if (l < 0.12 || l > 0.92 || s < 0.15) continue;
+
+    // Score: prefer high saturation + medium-high lightness (vibrant, visible)
+    const satScore = s; // 0-1, higher is better
+    const lumScore = 1 - Math.abs(l - 0.55) * 2; // peaks at 0.55 lightness
+    const score = satScore * 0.7 + lumScore * 0.3;
+
+    pixels.push({ r, g, b, h, s, l, score });
   }
 
   if (pixels.length === 0) {
-    const fallback = ['#888888', '#AAAAAA', '#666666', '#BBBBBB', '#999999', '#777777'];
+    const fallback = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD'];
     photoPaletteCache = { src: img.src, colors: fallback };
     return fallback;
   }
 
-  // Simple quantization: sort by different channels and pick medians from segments
-  const numColors = 6;
-  const colors: string[] = [];
-  const channels: (0 | 1 | 2)[] = [0, 1, 2, 0, 1, 2]; // r, g, b, r, g, b
+  // Sort by score descending, take top candidates
+  pixels.sort((a, b) => b.score - a.score);
+  const candidates = pixels.slice(0, Math.min(200, pixels.length));
 
-  // Split into segments and pick representative color from each
-  const sorted = [...pixels];
-  for (let i = 0; i < numColors; i++) {
-    const ch = channels[i % channels.length];
-    // Sort by this channel
-    sorted.sort((a, b) => a[ch] - b[ch]);
-    // Pick from evenly-spaced segments
-    const segStart = Math.floor((i / numColors) * sorted.length);
-    const segEnd = Math.floor(((i + 1) / numColors) * sorted.length);
-    const segment = sorted.slice(segStart, segEnd);
-    if (segment.length === 0) continue;
+  // Pick 6 diverse colors: high score + hue diversity + contrast with each other
+  const picked: PixelHSL[] = [];
+  const HUE_DIST = 25; // minimum hue difference between picks
 
-    // Average the segment
-    let rSum = 0, gSum = 0, bSum = 0;
-    for (const [r, g, b] of segment) { rSum += r; gSum += g; bSum += b; }
-    const n = segment.length;
-    const hex = '#' + [Math.round(rSum / n), Math.round(gSum / n), Math.round(bSum / n)]
-      .map(v => v.toString(16).padStart(2, '0')).join('');
-    colors.push(hex);
+  for (const px of candidates) {
+    if (picked.length >= 6) break;
+
+    // Check hue diversity
+    const tooClose = picked.some(p => {
+      const hueDiff = Math.min(Math.abs(px.h - p.h), 360 - Math.abs(px.h - p.h));
+      return hueDiff < HUE_DIST;
+    });
+    if (tooClose) continue;
+
+    picked.push(px);
   }
 
-  // Deduplicate similar colors
-  const unique = colors.filter((c, i) => colors.indexOf(c) === i);
-  while (unique.length < 6) unique.push(unique[0] || '#888888');
-  const result = unique.slice(0, 6);
+  // If not enough diverse colors, fill with top-scored remaining
+  if (picked.length < 6) {
+    for (const px of candidates) {
+      if (picked.length >= 6) break;
+      if (picked.includes(px)) continue;
+      picked.push(px);
+    }
+  }
+
+  // Boost saturation and lightness slightly to ensure they pop as overlays
+  const result = picked.slice(0, 6).map(px => {
+    let { h, s, l } = px;
+    // Boost saturation toward vibrant
+    s = Math.min(1, s * 1.2 + 0.1);
+    // Push lightness toward 0.5-0.65 range (visible on most backgrounds)
+    if (l < 0.4) l = l * 0.5 + 0.3;
+    if (l > 0.75) l = l * 0.6 + 0.25;
+    return hslToHex(h, s, l);
+  });
+
+  while (result.length < 6) result.push(result[0] || '#FF6B6B');
 
   photoPaletteCache = { src: img.src, colors: result };
-  console.log('[Trace] Extracted photo palette:', result);
   return result;
+}
+
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0, s = 0;
+
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+    else if (max === g) h = ((b - r) / d + 2) * 60;
+    else h = ((r - g) / d + 4) * 60;
+  }
+
+  return { h, s, l };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+
+  if (h < 60) { r = c; g = x; }
+  else if (h < 120) { r = x; g = c; }
+  else if (h < 180) { g = c; b = x; }
+  else if (h < 240) { g = x; b = c; }
+  else if (h < 300) { r = x; b = c; }
+  else { r = c; b = x; }
+
+  const toHex = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
 export function pickStickerColor(): string {
@@ -493,12 +551,12 @@ export function generateRandomComposition(canvasW: number, canvasH: number): imp
   const placed: TempSticker[] = [];
 
   function makeTempSticker(asset: StickerAsset, px: number, py: number): TempSticker {
-    const scale = getRandomScale(asset, canvasW, canvasH);
+    const scale = getDefaultScale(asset, canvasW, canvasH);
     return {
       assetId: asset.id, px, py, scale,
       rotation: (Math.random() - 0.5) * 24,
       color: pickStickerColor(),
-      opacity: 0.75 + Math.random() * 0.25,
+      opacity: 1,
     };
   }
 
@@ -560,6 +618,7 @@ export function generateRandomComposition(canvasW: number, canvasH: number): imp
     mode: state.stickerMode,
     opacity: t.opacity,
     effectUnitSize: unitSize,
+    subjectAvoid: false,
   }));
 }
 

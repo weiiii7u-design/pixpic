@@ -15,6 +15,8 @@ let animFrame = 0;
 let currentDrawArea: DrawArea = { x: 0, y: 0, w: 0, h: 0 };
 let currentCanvasW = 0;
 let currentCanvasH = 0;
+/** Canvas size when no panel is open — the "full" reference size for sticker dimensions */
+let referenceCanvasW = 0;
 
 const RATIO_MAP: Record<CanvasRatio, number | null> = {
   'original': null,
@@ -36,6 +38,36 @@ export function initCompositor(canvasEl: HTMLCanvasElement): void {
 
 export function getCanvasSize(): { w: number; h: number } {
   return { w: currentCanvasW, h: currentCanvasH };
+}
+
+/** Return the full (panel-closed) canvas size for scale calculations.
+ *  When a panel is open the canvas is smaller; sticker default scale
+ *  should be computed against the full size so displayScale works correctly. */
+export function getReferenceCanvasSize(): { w: number; h: number } {
+  const w = referenceCanvasW > 0 ? referenceCanvasW : currentCanvasW;
+  // Derive height from width using same aspect ratio
+  const h = currentCanvasH > 0 && currentCanvasW > 0
+    ? w * (currentCanvasH / currentCanvasW)
+    : w;
+  return { w, h };
+}
+
+export function getPhotoRect(): { w: number; h: number } {
+  return { w: currentDrawArea.w, h: currentDrawArea.h };
+}
+
+/** Photo rect at full (panel-closed) canvas size */
+export function getReferencePhotoRect(): { w: number; h: number } {
+  const ref = getReferenceCanvasSize();
+  const pr = calcPhotoRect(ref.w, ref.h);
+  return { w: pr.w, h: pr.h };
+}
+
+/** How much the canvas has shrunk from its full (panel-closed) size.
+ *  Used to scale sticker dimensions proportionally. */
+export function getStickerDisplayScale(): number {
+  if (referenceCanvasW <= 0) return 1;
+  return currentCanvasW / referenceCanvasW;
 }
 
 function getCanvasAspect(): number {
@@ -90,7 +122,7 @@ function calcPhotoRect(canvasW: number, canvasH: number): DrawArea {
 }
 
 function drawCanvasBackground(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  if (state.mode === 'full') {
+  if (state.effectMode === 'full') {
     // Full mode: use its background setting
     const { full } = state;
     if (full.background === 'gradient') {
@@ -108,6 +140,9 @@ function drawCanvasBackground(ctx: CanvasRenderingContext2D, w: number, h: numbe
     } else {
       ctx.fillStyle = '#ffffff';
     }
+  } else if (state.canvasBgColor && state.canvasRatio !== 'original') {
+    // User-selected canvas background color
+    ctx.fillStyle = state.canvasBgColor;
   } else {
     ctx.fillStyle = '#ffffff';
   }
@@ -145,6 +180,15 @@ export function render(): void {
   currentCanvasW = canvasW;
   currentCanvasH = canvasH;
 
+  // Track reference (panel-closed) canvas size for sticker scaling
+  if (state.activeTool === 'none') {
+    referenceCanvasW = canvasW;
+  }
+  // Ensure reference is always at least as large as current
+  if (referenceCanvasW <= 0) {
+    referenceCanvasW = canvasW;
+  }
+
   // 1. Draw canvas background
   drawCanvasBackground(ctx, canvasW, canvasH);
 
@@ -152,49 +196,65 @@ export function render(): void {
   const photoRect = calcPhotoRect(canvasW, canvasH);
   currentDrawArea = photoRect;
 
-  // 3. Render mode
+  // 3. Layered rendering: effect (bottom) + stickers (top)
   const img = state.sourceImage;
 
-  if (state.mode === 'stamp') {
-    // Stamp: photo clipped to photoRect, but stickers can extend to full canvas
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
-    ctx.clip();
-    ctx.drawImage(img, photoRect.x, photoRect.y, photoRect.w, photoRect.h);
-    ctx.restore();
+  // Layer 1: Photo + effect (clipped to photoRect)
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
+  ctx.clip();
 
-    // Render stickers
-    if (state.subjectAvoid && state.subjectMask) {
-      // Offscreen: render stickers → erase subject → composite
+  if (state.effectMode === 'partial') {
+    renderPartialMode(ctx, img, photoRect);
+  } else if (state.effectMode === 'full') {
+    renderFullMode(ctx, img, photoRect);
+  } else {
+    // No effect — just draw photo
+    ctx.drawImage(img, photoRect.x, photoRect.y, photoRect.w, photoRect.h);
+  }
+
+  ctx.restore();
+
+  // Layer 2: Stickers (always rendered, on full canvas)
+  if (state.stickers.length > 0 || state.selectedStickerId) {
+    const hasAnyAvoid = state.stickers.some(s => s.subjectAvoid) && state.subjectMask;
+    if (hasAnyAvoid) {
+      // Render stickers with subject avoidance on individual stickers
       const offscreen = document.createElement('canvas');
       offscreen.width = canvas.width;
       offscreen.height = canvas.height;
       const offCtx = offscreen.getContext('2d')!;
       offCtx.scale(dpr, dpr);
       renderStampMode(offCtx, img, photoRect, 1);
-      eraseSubjectFromCanvas(offCtx, img, photoRect, canvasW, canvasH);
-      ctx.drawImage(offscreen, 0, 0, canvasW, canvasH);
+      // Only erase subject for stickers that have subjectAvoid enabled
+      // (eraseSubjectFromCanvas applies to the whole offscreen canvas, which is correct
+      //  because stickers without avoid are already composited — we need per-sticker approach)
+      // Simple approach: render avoid stickers separately
+      offCtx.clearRect(0, 0, canvasW, canvasH);
+
+      // Pass 1: non-avoid stickers directly to main ctx
+      const savedStickers = state.stickers;
+      const nonAvoid = savedStickers.filter(s => !s.subjectAvoid);
+      const avoid = savedStickers.filter(s => s.subjectAvoid);
+
+      if (nonAvoid.length > 0) {
+        state.stickers = nonAvoid;
+        renderStampMode(ctx, img, photoRect, 1);
+      }
+
+      // Pass 2: avoid stickers on offscreen, erase subject, composite
+      if (avoid.length > 0) {
+        state.stickers = avoid;
+        renderStampMode(offCtx, img, photoRect, 1);
+        eraseSubjectFromCanvas(offCtx, img, photoRect, canvasW, canvasH);
+        ctx.drawImage(offscreen, 0, 0, canvasW, canvasH);
+      }
+
+      state.stickers = savedStickers;
     } else {
       renderStampMode(ctx, img, photoRect, 1);
     }
-  } else {
-    // Partial/Full: everything clipped to photo rect
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
-    ctx.clip();
-
-    switch (state.mode) {
-      case 'partial':
-        renderPartialMode(ctx, img, photoRect);
-        break;
-      case 'full':
-        renderFullMode(ctx, img, photoRect);
-        break;
-    }
-
-    ctx.restore();
   }
 }
 
@@ -242,39 +302,60 @@ export function exportCanvas(): void {
   // Photo
   const photoRect = calcPhotoRect(exportW, exportH);
 
-  // For stamp mode: render photo first, then stickers separately
-  if (state.mode === 'stamp') {
-    exportCtx.save();
-    exportCtx.beginPath();
-    exportCtx.rect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
-    exportCtx.clip();
-    exportCtx.drawImage(img, photoRect.x, photoRect.y, photoRect.w, photoRect.h);
-    exportCtx.restore();
+  // Layer 1: Photo + effect (clipped to photoRect)
+  exportCtx.save();
+  exportCtx.beginPath();
+  exportCtx.rect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
+  exportCtx.clip();
 
-    // Render stickers: use a temp canvas at export size, sizeScale=1 (canvas IS the export size)
-    const stickerCanvas = document.createElement('canvas');
-    stickerCanvas.width = exportW;
-    stickerCanvas.height = exportH;
-    const stickerCtx = stickerCanvas.getContext('2d')!;
-    // renderStampMode with sizeScale = exportW / currentCanvasW so sticker dimensions scale up
-    renderStampMode(stickerCtx, img, photoRect, exportW / currentCanvasW);
-
-    if (state.subjectAvoid && state.subjectMask) {
-      // Erase subject from sticker layer
-      eraseSubjectFromCanvas(stickerCtx, img, photoRect, exportW, exportH);
-    }
-
-    exportCtx.drawImage(stickerCanvas, 0, 0);
+  if (state.effectMode === 'partial') {
+    renderPartialMode(exportCtx, img, photoRect);
+  } else if (state.effectMode === 'full') {
+    renderFullMode(exportCtx, img, photoRect);
   } else {
-    exportCtx.save();
-    exportCtx.beginPath();
-    exportCtx.rect(photoRect.x, photoRect.y, photoRect.w, photoRect.h);
-    exportCtx.clip();
-    switch (state.mode) {
-      case 'partial': renderPartialMode(exportCtx, img, photoRect); break;
-      case 'full': renderFullMode(exportCtx, img, photoRect); break;
+    exportCtx.drawImage(img, photoRect.x, photoRect.y, photoRect.w, photoRect.h);
+  }
+
+  exportCtx.restore();
+
+  // Layer 2: Stickers (always rendered)
+  if (state.stickers.length > 0) {
+    const hasAnyAvoid = state.stickers.some(s => s.subjectAvoid) && state.subjectMask;
+    const stickerScale = exportW / currentCanvasW;
+
+    if (hasAnyAvoid) {
+      const savedStickers = state.stickers;
+      const nonAvoid = savedStickers.filter(s => !s.subjectAvoid);
+      const avoid = savedStickers.filter(s => s.subjectAvoid);
+
+      if (nonAvoid.length > 0) {
+        state.stickers = nonAvoid;
+        const sc = document.createElement('canvas');
+        sc.width = exportW; sc.height = exportH;
+        const sCtx = sc.getContext('2d')!;
+        renderStampMode(sCtx, img, photoRect, stickerScale);
+        exportCtx.drawImage(sc, 0, 0);
+      }
+
+      if (avoid.length > 0) {
+        state.stickers = avoid;
+        const sc = document.createElement('canvas');
+        sc.width = exportW; sc.height = exportH;
+        const sCtx = sc.getContext('2d')!;
+        renderStampMode(sCtx, img, photoRect, stickerScale);
+        eraseSubjectFromCanvas(sCtx, img, photoRect, exportW, exportH);
+        exportCtx.drawImage(sc, 0, 0);
+      }
+
+      state.stickers = savedStickers;
+    } else {
+      const stickerCanvas = document.createElement('canvas');
+      stickerCanvas.width = exportW;
+      stickerCanvas.height = exportH;
+      const stickerCtx = stickerCanvas.getContext('2d')!;
+      renderStampMode(stickerCtx, img, photoRect, stickerScale);
+      exportCtx.drawImage(stickerCanvas, 0, 0);
     }
-    exportCtx.restore();
   }
 
   // Restore selection
@@ -349,7 +430,7 @@ function setupInputHandlers(canvasEl: HTMLCanvasElement): void {
 
   canvasEl.addEventListener('pointerdown', (e) => {
     // Retry/cancel segmentation on tap
-    if (state.mode === 'partial' && state.partial.target === 'auto') {
+    if (state.effectMode === 'partial' && state.partial.target === 'auto') {
       if (state.subjectError) {
         updateState({ subjectError: null, subjectMask: null, subjectLoading: false });
         return;
@@ -359,14 +440,14 @@ function setupInputHandlers(canvasEl: HTMLCanvasElement): void {
         return;
       }
     }
-    if (state.mode === 'stamp' && !state.eraserActive) return; // handled by gesture
+    if (state.activeTool === 'sticker' && !state.eraserActive) return; // handled by gesture
     isPointerDown = true;
     handleInteraction(e);
   });
 
   canvasEl.addEventListener('pointermove', (e) => {
     if (!isPointerDown) return;
-    if (state.mode === 'stamp' && !state.eraserActive) return;
+    if (state.activeTool === 'sticker' && !state.eraserActive) return;
     handleInteraction(e);
   });
 
@@ -374,12 +455,12 @@ function setupInputHandlers(canvasEl: HTMLCanvasElement): void {
   canvasEl.addEventListener('pointercancel', () => { isPointerDown = false; });
 
   canvasEl.addEventListener('touchstart', (e) => {
-    if (state.mode === 'stamp' || e.touches.length > 1 || state.brushActive || state.eraserActive) {
+    if (state.activeTool === 'sticker' || e.touches.length > 1 || state.brushActive || state.eraserActive) {
       e.preventDefault();
     }
   }, { passive: false });
   canvasEl.addEventListener('touchmove', (e) => {
-    if (state.mode === 'stamp' || e.touches.length > 1 || state.brushActive || state.eraserActive) {
+    if (state.activeTool === 'sticker' || e.touches.length > 1 || state.brushActive || state.eraserActive) {
       e.preventDefault();
     }
   }, { passive: false });
@@ -387,9 +468,9 @@ function setupInputHandlers(canvasEl: HTMLCanvasElement): void {
   function handleInteraction(e: PointerEvent): void {
     const pos = getCanvasPos(e);
 
-    if (state.mode === 'partial' && state.partial.target === 'brush' && state.brushActive) {
+    if (state.effectMode === 'partial' && state.partial.target === 'brush' && state.brushActive) {
       applyBrush(pos.x, pos.y, currentDrawArea);
-    } else if (state.eraserActive && (state.mode === 'partial' || state.mode === 'full')) {
+    } else if (state.eraserActive && (state.effectMode === 'partial' || state.effectMode === 'full')) {
       applyEraser(pos.x, pos.y, currentDrawArea);
     }
   }

@@ -6,8 +6,9 @@ import type { StickerInstance, DrawArea } from '../types';
 import { distance } from '../core/math';
 import { getStickerDimensions } from '../core/stickers';
 import { stickerToCanvas, canvasToSticker } from '../modes/stamp';
+import { getStickerDisplayScale } from '../render/compositor';
 
-type Action = 'none' | 'sticker-move' | 'sticker-resize' | 'photo-pan';
+type Action = 'none' | 'sticker-move' | 'sticker-resize' | 'sticker-rotate' | 'photo-pan';
 
 const g = {
   action: 'none' as Action,
@@ -25,6 +26,7 @@ const g = {
 };
 
 const HANDLE_R = 24;
+const DELETE_R = 18;  // hit radius for × delete button
 const SNAP_THRESHOLD = 0.015;
 let lastVibrated = 0;
 
@@ -37,7 +39,7 @@ function tryVibrate() {
 }
 
 function isBrushOrEraser(): boolean {
-  if (state.mode === 'partial' && state.partial.target === 'brush' && state.brushActive) return true;
+  if (state.effectMode === 'partial' && state.partial.target === 'brush' && state.brushActive) return true;
   if (state.eraserActive) return true;
   return false;
 }
@@ -64,24 +66,77 @@ function toLocal(cx: number, cy: number, s: StickerInstance, cw: number, ch: num
 }
 
 function hitSticker(cx: number, cy: number, cw: number, ch: number): StickerInstance | null {
+  const ds = getStickerDisplayScale();
   for (let i = state.stickers.length - 1; i >= 0; i--) {
     const s = state.stickers[i];
     const { width, height } = getStickerDimensions(s.assetId, s.scale);
+    const w = width * ds, h = height * ds;
     const { lx, ly } = toLocal(cx, cy, s, cw, ch);
-    if (Math.abs(lx) <= width / 2 + 8 && Math.abs(ly) <= height / 2 + 8) return s;
+    if (Math.abs(lx) <= w / 2 + 8 && Math.abs(ly) <= h / 2 + 8) return s;
   }
   return null;
 }
 
-function hitCorner(cx: number, cy: number, cw: number, ch: number): boolean {
+function hitResizeCorner(cx: number, cy: number, cw: number, ch: number): boolean {
   const sel = state.stickers.find(s => s.id === state.selectedStickerId);
   if (!sel) return false;
+  const ds = getStickerDisplayScale();
   const { width, height } = getStickerDimensions(sel.assetId, sel.scale);
+  const w = width * ds, h = height * ds;
   const { lx, ly } = toLocal(cx, cy, sel, cw, ch);
-  for (const [hx, hy] of [[-width / 2, -height / 2], [width / 2, -height / 2], [width / 2, height / 2], [-width / 2, height / 2]]) {
+  // Top-right and bottom-left are resize-only handles (top-left is delete, bottom-right is rotate)
+  for (const [hx, hy] of [[w / 2, -h / 2], [-w / 2, h / 2]]) {
     if (Math.abs(lx - hx) < HANDLE_R && Math.abs(ly - hy) < HANDLE_R) return true;
   }
   return false;
+}
+
+function hitRotateCorner(cx: number, cy: number, cw: number, ch: number): boolean {
+  const sel = state.stickers.find(s => s.id === state.selectedStickerId);
+  if (!sel) return false;
+  const ds = getStickerDisplayScale();
+  const { width, height } = getStickerDimensions(sel.assetId, sel.scale);
+  const w = width * ds, h = height * ds;
+  const { lx, ly } = toLocal(cx, cy, sel, cw, ch);
+  // Bottom-right corner is rotate+resize
+  return Math.abs(lx - w / 2) < HANDLE_R && Math.abs(ly - h / 2) < HANDLE_R;
+}
+
+function hitSubjectAvoidButton(cx: number, cy: number, cw: number, ch: number): boolean {
+  const sel = state.stickers.find(s => s.id === state.selectedStickerId);
+  if (!sel) return false;
+  const ds = getStickerDisplayScale();
+  const { width, height } = getStickerDimensions(sel.assetId, sel.scale);
+  const w = width * ds, h = height * ds;
+  const { lx, ly } = toLocal(cx, cy, sel, cw, ch);
+  // Bottom-left corner — circle button
+  const dx = lx - (-w / 2);
+  const dy = ly - (h / 2);
+  return dx * dx + dy * dy <= DELETE_R * DELETE_R;
+}
+
+function hitDeleteButton(cx: number, cy: number, cw: number, ch: number): boolean {
+  const sel = state.stickers.find(s => s.id === state.selectedStickerId);
+  if (!sel) return false;
+  const ds = getStickerDisplayScale();
+  const { width, height } = getStickerDimensions(sel.assetId, sel.scale);
+  const w = width * ds, h = height * ds;
+  const { lx, ly } = toLocal(cx, cy, sel, cw, ch);
+  const dx = lx - (-w / 2);
+  const dy = ly - (-h / 2);
+  return dx * dx + dy * dy <= DELETE_R * DELETE_R;
+}
+
+function hitEditButton(cx: number, cy: number, cw: number, ch: number): boolean {
+  const sel = state.stickers.find(s => s.id === state.selectedStickerId);
+  if (!sel) return false;
+  const ds = getStickerDisplayScale();
+  const { width, height } = getStickerDimensions(sel.assetId, sel.scale);
+  const w = width * ds, h = height * ds;
+  const { lx, ly } = toLocal(cx, cy, sel, cw, ch);
+  const btnCX = w / 2;
+  const btnCY = -h / 2;
+  return Math.abs(lx - btnCX) < 24 && Math.abs(ly - btnCY) < 16;
 }
 
 export function setupGestureHandlers(
@@ -95,12 +150,45 @@ export function setupGestureHandlers(
     const p = pt(e, canvas);
     const { cw, ch } = getCSSDims(canvas);
 
-    if (state.mode === 'stamp') {
-      // Corner handle → resize+rotate
-      if (state.selectedStickerId && hitCorner(p.x, p.y, cw, ch)) {
+    // Sticker interactions (always available when stickers exist)
+    if (state.stickers.length > 0) {
+      // Delete button (× at top-left of selected sticker)
+      if (state.selectedStickerId && hitDeleteButton(p.x, p.y, cw, ch)) {
+        updateState({
+          stickers: state.stickers.filter(s => s.id !== state.selectedStickerId),
+          selectedStickerId: null,
+        });
+        return;
+      }
+
+      // Edit button (top-right of selected sticker → open sticker edit panel)
+      if (state.selectedStickerId && hitEditButton(p.x, p.y, cw, ch)) {
+        updateState({ activeTool: 'sticker', stickerEditOnly: true });
+        return;
+      }
+
+      // Subject avoid toggle (bottom-left)
+      if (state.selectedStickerId && hitSubjectAvoidButton(p.x, p.y, cw, ch)) {
+        const s = state.stickers.find(s => s.id === state.selectedStickerId);
+        if (s) {
+          const toggled = !s.subjectAvoid;
+          // Trigger segmentation if enabling and no mask yet
+          if (toggled && !state.subjectMask && !state.subjectLoading && state.sourceImage) {
+            import('../modes/partial').then(m => m.triggerSegmentation(state.sourceImage!));
+          }
+          const stickers = state.stickers.map(st =>
+            st.id === state.selectedStickerId ? { ...st, subjectAvoid: toggled } : st
+          );
+          updateState({ stickers });
+        }
+        return;
+      }
+
+      // Rotate handle (bottom-right corner → resize + rotate)
+      if (state.selectedStickerId && hitRotateCorner(p.x, p.y, cw, ch)) {
         const sel = state.stickers.find(s => s.id === state.selectedStickerId)!;
         const { px, py } = stickerToCanvas(sel, cw, ch);
-        g.action = 'sticker-resize';
+        g.action = 'sticker-rotate';
         g.pointerId = e.pointerId;
         g.stickerId = sel.id;
         g.centerDist = Math.max(1, Math.hypot(p.x - px, p.y - py));
@@ -111,7 +199,21 @@ export function setupGestureHandlers(
         return;
       }
 
-      // Sticker body → select + move
+      // Resize handles (top-right, bottom-left corners → scale only, no rotate)
+      if (state.selectedStickerId && hitResizeCorner(p.x, p.y, cw, ch)) {
+        const sel = state.stickers.find(s => s.id === state.selectedStickerId)!;
+        const { px, py } = stickerToCanvas(sel, cw, ch);
+        g.action = 'sticker-resize';
+        g.pointerId = e.pointerId;
+        g.stickerId = sel.id;
+        g.centerDist = Math.max(1, Math.hypot(p.x - px, p.y - py));
+        g.startScale = sel.scale;
+        g.startRotation = sel.rotation;
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+
+      // Sticker body → select + move (do NOT auto-open panel)
       const hit = hitSticker(p.x, p.y, cw, ch);
       if (hit) {
         const norm = canvasToSticker(p.x, p.y, cw, ch);
@@ -179,6 +281,17 @@ export function setupGestureHandlers(
       if (s) {
         const { px, py } = stickerToCanvas(s, cw, ch);
         const dist = Math.max(1, Math.hypot(p.x - px, p.y - py));
+        s.scale = Math.min(8, Math.max(0.08, g.startScale * (dist / g.centerDist)));
+        // No rotation change — resize only
+        notify();
+      }
+    }
+
+    if (g.action === 'sticker-rotate') {
+      const s = state.stickers.find(s => s.id === g.stickerId);
+      if (s) {
+        const { px, py } = stickerToCanvas(s, cw, ch);
+        const dist = Math.max(1, Math.hypot(p.x - px, p.y - py));
         const angle = Math.atan2(p.y - py, p.x - px);
         s.scale = Math.min(8, Math.max(0.08, g.startScale * (dist / g.centerDist)));
         s.rotation = g.startRotation + ((angle - g.centerAngle) * 180) / Math.PI;
@@ -214,7 +327,7 @@ export function setupGestureHandlers(
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const factor = e.deltaY > 0 ? 0.92 : 1.08;
-    if (state.mode === 'stamp' && state.selectedStickerId) {
+    if (state.selectedStickerId) {
       const s = state.stickers.find(s => s.id === state.selectedStickerId);
       if (s) { s.scale = Math.min(8, Math.max(0.08, s.scale * factor)); notify(); }
     } else if (state.canvasRatio !== 'original') {
@@ -227,7 +340,7 @@ export function setupGestureHandlers(
     if (e.touches.length === 2) {
       e.preventDefault();
       g.pinchDist = distance(e.touches[0].clientX, e.touches[0].clientY, e.touches[1].clientX, e.touches[1].clientY);
-      if (state.mode === 'stamp' && state.selectedStickerId) {
+      if (state.selectedStickerId) {
         const s = state.stickers.find(s => s.id === state.selectedStickerId);
         if (s) {
           g.pinchStickerScale = s.scale;
@@ -244,7 +357,7 @@ export function setupGestureHandlers(
     if (e.touches.length === 2) {
       e.preventDefault();
       const d = distance(e.touches[0].clientX, e.touches[0].clientY, e.touches[1].clientX, e.touches[1].clientY);
-      if (state.mode === 'stamp' && state.selectedStickerId) {
+      if (state.selectedStickerId) {
         const s = state.stickers.find(s => s.id === state.selectedStickerId);
         if (s) {
           const a = Math.atan2(e.touches[1].clientY - e.touches[0].clientY, e.touches[1].clientX - e.touches[0].clientX);
