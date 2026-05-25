@@ -9,7 +9,7 @@ export function applyEraser(
   canvasY: number,
   drawArea: DrawArea
 ): void {
-  const density = state.effectMode === 'full' ? state.full.density : state.partial.density;
+  const density = state.partial.density;
   const { cols, rows } = getGridDimensions(density, drawArea);
   const total = cols * rows;
 

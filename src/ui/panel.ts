@@ -1,16 +1,14 @@
-// === Trace — Bottom Toolbar + Popup Panels (Layer Architecture) ===
+// === PixPic — Panel (Figma Redesign: 背景/贴纸/画布 + floating action bar) ===
 
 import { el, clearEl } from './dom';
-import { state, updateState, updatePartial, updateFull } from '../state';
-import type {
-  CharsetName, ColorMode, BackgroundMode, CanvasRatio, StickerMode, EditorTool,
-} from '../types';
-import { createSlider, createToggle, createChipGroup, createColorPicker, createButton } from './controls';
+import { state, updateState, updatePartial } from '../state';
+import type { CanvasRatio, StickerMode, EditorTool, AdjustSubTab, OverlayShape, OverlayInstance } from '../types';
+import { createSlider, createToggle, createChipGroup, createButton } from './controls';
 import { triggerSegmentation } from '../modes/partial';
 import {
   LIBRARY_GROUPS, getLibraryForGroup, getStickerPreviewUrl,
   getDefaultScale, getEffectUnitSize,
-  pickStickerColor, generateRandomComposition, clearEffectCache,
+  pickStickerColor, clearEffectCache,
   extractPhotoPalette,
 } from '../core/stickers';
 import { COLOR_PALETTES } from '../core/shapes';
@@ -21,14 +19,12 @@ import { uid } from '../core/math';
 // === Template System (localStorage) ===
 interface StickerTemplate {
   id: string;
-  /** Aspect ratio of the canvas when the template was created (w/h) */
   canvasAspect?: number;
   stickers: { assetId: string; x: number; y: number; scale: number; rotation: number; subjectAvoid: boolean }[];
 }
 
 const TEMPLATE_STORAGE_KEY = 'trace-sticker-templates';
 
-// Built-in templates (hardcoded)
 const BUILTIN_TEMPLATES: StickerTemplate[] = [
   {
     id: 'builtin-1',
@@ -151,7 +147,6 @@ function getSavedTemplates(): StickerTemplate[] {
   try {
     const raw = localStorage.getItem(TEMPLATE_STORAGE_KEY);
     const userTemplates: StickerTemplate[] = raw ? JSON.parse(raw) : [];
-    // Merge builtin + user, deduplicate by id
     const all = [...BUILTIN_TEMPLATES, ...userTemplates];
     const seen = new Set<string>();
     return all.filter(t => {
@@ -163,7 +158,6 @@ function getSavedTemplates(): StickerTemplate[] {
 }
 
 function saveTemplate(template: StickerTemplate): void {
-  // Only save user templates (not builtins) to localStorage
   try {
     const raw = localStorage.getItem(TEMPLATE_STORAGE_KEY);
     const userTemplates: StickerTemplate[] = raw ? JSON.parse(raw) : [];
@@ -199,29 +193,19 @@ function applyRandomTemplate(): void {
   const unitSize = getEffectUnitSize(canvasSize.w, canvasSize.h);
 
   const currentAspect = canvasSize.w / canvasSize.h;
-  const templateAspect = tpl.canvasAspect || (3 / 4); // default to 3:4 portrait
+  const templateAspect = tpl.canvasAspect || (3 / 4);
 
-  // Calculate how to fit the template's layout into the current canvas.
-  // Template coords are normalized 0-1 in its original canvas.
-  // If the current canvas is wider/shorter, we need to shrink the layout
-  // so all stickers fit within 0-1 range on both axes.
   let scaleX = 1, scaleY = 1;
   if (currentAspect > templateAspect) {
-    // Current is wider than template was — height is the constraint
-    // Template's vertical spread fits, but horizontal positions need compression
     scaleX = templateAspect / currentAspect;
   } else {
-    // Current is taller than template was — width is the constraint
     scaleY = currentAspect / templateAspect;
   }
 
   const fitScale = Math.min(scaleX, scaleY);
-
-  // All stickers in a template use the same color (单色)
   const templateColor = pickStickerColor();
 
   const stickers = tpl.stickers.map(s => {
-    // Remap coordinates: center the layout and scale to fit
     const x = 0.5 + (s.x - 0.5) * scaleX;
     const y = 0.5 + (s.y - 0.5) * scaleY;
 
@@ -240,7 +224,6 @@ function applyRandomTemplate(): void {
     };
   });
 
-  // If any sticker has subjectAvoid and no mask yet, trigger segmentation
   if (stickers.some(s => s.subjectAvoid) && !state.subjectMask && !state.subjectLoading && state.sourceImage) {
     import('../modes/partial').then(m => m.triggerSegmentation(state.sourceImage!));
   }
@@ -248,123 +231,111 @@ function applyRandomTemplate(): void {
   updateState({ stickers, selectedStickerId: null });
 }
 
-// Snapshot for cancel (✕) support
-let stateSnapshot: Record<string, unknown> | null = null;
+// === Remix Icon classes for toolbar (Apple Photos tab bar style) ===
+const TOOLS: { id: EditorTool; label: string; iconClass: string; activeIconClass: string }[] = [
+  { id: 'adjust', label: 'Adjust', iconClass: 'ri-magic-line', activeIconClass: 'ri-magic-fill' },
+  { id: 'sticker', label: 'Stickers', iconClass: 'ri-sticky-note-line', activeIconClass: 'ri-sticky-note-fill' },
+  { id: 'canvas', label: 'Crop', iconClass: 'ri-crop-line', activeIconClass: 'ri-crop-fill' },
+];
 
-function takeSnapshot(): void {
-  stateSnapshot = {
+// === Sub-tabs for 背景 ===
+const ADJUST_SUBTABS: { id: AdjustSubTab; label: string }[] = [
+  { id: 'dots', label: '点样' },
+  { id: 'palette', label: '色板' },
+  { id: 'otherParams', label: '其他参数' },
+];
+
+// === Undo/Redo History ===
+let undoStack: any[] = [];
+let redoStack: any[] = [];
+
+function pushUndo(): void {
+  undoStack.push({
+    stickers: JSON.parse(JSON.stringify(state.stickers)),
+    partial: JSON.parse(JSON.stringify(state.partial)),
     effectMode: state.effectMode,
-    partial: { ...state.partial },
-    full: { ...state.full },
-    stickers: state.stickers.map(s => ({ ...s })),
-    selectedStickerId: state.selectedStickerId,
-    stampOpacity: state.stampOpacity,
-    stickerMode: state.stickerMode,
-    stickerPalette: state.stickerPalette,
+    overlayImages: state.overlayImages.map(o => ({ ...o })), // shallow copy (image ref stays)
     canvasRatio: state.canvasRatio,
+    canvasBgColor: state.canvasBgColor,
+    canvasBgPalette: state.canvasBgPalette,
     photoX: state.photoX,
     photoY: state.photoY,
     photoScale: state.photoScale,
-    subjectAvoid: state.subjectAvoid,
-    brushMask: state.brushMask,
-    eraserMask: state.eraserMask,
-    subjectMask: state.subjectMask,
-  };
-}
-
-function restoreSnapshot(): void {
-  if (!stateSnapshot) return;
-  Object.assign(state.partial, stateSnapshot.partial);
-  Object.assign(state.full, stateSnapshot.full);
-  updateState({
-    effectMode: stateSnapshot.effectMode as any,
-    stickers: stateSnapshot.stickers as any,
-    selectedStickerId: stateSnapshot.selectedStickerId as any,
-    stampOpacity: stateSnapshot.stampOpacity as any,
-    stickerMode: stateSnapshot.stickerMode as any,
-    stickerPalette: stateSnapshot.stickerPalette as any,
-    canvasRatio: stateSnapshot.canvasRatio as any,
-    photoX: stateSnapshot.photoX as any,
-    photoY: stateSnapshot.photoY as any,
-    photoScale: stateSnapshot.photoScale as any,
-    subjectAvoid: stateSnapshot.subjectAvoid as any,
-    brushMask: stateSnapshot.brushMask as any,
-    eraserMask: stateSnapshot.eraserMask as any,
-    subjectMask: stateSnapshot.subjectMask as any,
   });
-  stateSnapshot = null;
+  redoStack = [];
+  if (undoStack.length > 20) undoStack.shift();
 }
 
-const TOOLS: { id: EditorTool; label: string; icon: string }[] = [
-  { id: 'adjust', label: '调整', icon: '◎' },
-  { id: 'sticker', label: '贴纸', icon: '✦' },
-  { id: 'canvas', label: '画布', icon: '▢' },
-];
+function doUndo(): void {
+  if (undoStack.length === 0) return;
+  redoStack.push({
+    stickers: JSON.parse(JSON.stringify(state.stickers)),
+    partial: JSON.parse(JSON.stringify(state.partial)),
+    effectMode: state.effectMode,
+    overlayImages: state.overlayImages.map(o => ({ ...o })),
+    canvasRatio: state.canvasRatio,
+    canvasBgColor: state.canvasBgColor,
+    canvasBgPalette: state.canvasBgPalette,
+    photoX: state.photoX,
+    photoY: state.photoY,
+    photoScale: state.photoScale,
+  });
+  const prev = undoStack.pop()!;
+  updateState({
+    stickers: prev.stickers,
+    effectMode: prev.effectMode,
+    overlayImages: prev.overlayImages,
+    selectedOverlayId: null,
+    canvasRatio: prev.canvasRatio,
+    canvasBgColor: prev.canvasBgColor,
+    canvasBgPalette: prev.canvasBgPalette,
+    photoX: prev.photoX,
+    photoY: prev.photoY,
+    photoScale: prev.photoScale,
+  });
+  Object.assign(state.partial, prev.partial);
+}
 
+// ===== CREATE PANEL =====
 export function createPanel(): HTMLElement {
   const wrapper = el('div', { className: 'panel-wrapper' });
 
-  // Popup panel (hidden by default)
-  const panel = el('div', { className: 'panel panel-hidden' });
+  // Panel sheet (white rounded-top container — all controls inside)
+  const sheet = el('div', { className: 'panel-sheet' });
 
-  // Panel header with ✕ and ✓ (and optional random/template buttons)
-  const header = el('div', { className: 'panel-header' });
-  const cancelBtn = el('button', { className: 'panel-header-btn panel-cancel' }, ['✕']);
-  const titleEl = el('span', { className: 'panel-header-title' }, ['']);
-  const headerRight = el('div', { className: 'panel-header-right' });
-  const randomBtn = el('button', { className: 'panel-random-btn panel-btn-hidden' }, ['随机生成']);
-  const templateBtn = el('button', { className: 'panel-random-btn panel-btn-hidden panel-template-btn' }, ['随机模版']);
-  const autoBtn = el('button', { className: 'panel-area-btn panel-btn-hidden', 'data-area': 'auto' });
-  autoBtn.innerHTML = '<span class="area-icon">⊙</span><span class="area-text">自动</span>';
-  const brushBtn = el('button', { className: 'panel-area-btn panel-btn-hidden', 'data-area': 'brush' });
-  brushBtn.innerHTML = '<span class="area-icon">◉</span><span class="area-text">画笔</span>';
-  const confirmBtn = el('button', { className: 'panel-header-btn panel-confirm' }, ['✓']);
+  // Action bar (undo/redo LEFT + tool icons RIGHT — all in one row)
+  const actionBar = el('div', { className: 'action-bar' });
+  sheet.appendChild(actionBar);
 
-  cancelBtn.addEventListener('click', () => {
-    restoreSnapshot();
-    updateState({ activeTool: 'none', stickerEditOnly: false });
-  });
-  confirmBtn.addEventListener('click', () => {
-    stateSnapshot = null;
-    updateState({ activeTool: 'none', stickerEditOnly: false });
-  });
+  // Sub-tabs row
+  const subtabs = el('div', { className: 'panel-subtabs' });
+  sheet.appendChild(subtabs);
 
-  header.appendChild(cancelBtn);
-  header.appendChild(titleEl);
-  headerRight.appendChild(randomBtn);
-  headerRight.appendChild(templateBtn);
-  headerRight.appendChild(autoBtn);
-  headerRight.appendChild(brushBtn);
-  headerRight.appendChild(confirmBtn);
-  header.appendChild(headerRight);
-  panel.appendChild(header);
-
+  // Content area (scrollable)
   const content = el('div', { className: 'panel-content' });
-  panel.appendChild(content);
+  sheet.appendChild(content);
 
-  wrapper.appendChild(panel);
+  wrapper.appendChild(sheet);
 
-  // Bottom toolbar (always visible)
+  // Main toolbar (bottom tab bar)
   const toolbar = el('div', { className: 'toolbar' });
   for (const tool of TOOLS) {
+    const isActive = state.activeTool === tool.id;
     const btn = el('button', {
-      className: `toolbar-btn ${state.activeTool === tool.id ? 'active' : ''}`,
+      className: `toolbar-btn ${isActive ? 'active' : ''}`,
       'data-tool': tool.id,
     });
-    const iconEl = el('span', { className: 'toolbar-icon' }, [tool.icon]);
+    const iconEl = el('i', { className: `toolbar-icon ${isActive ? tool.activeIconClass : tool.iconClass}` });
     const labelEl = el('span', { className: 'toolbar-label' }, [tool.label]);
     btn.appendChild(iconEl);
     btn.appendChild(labelEl);
 
     btn.addEventListener('click', () => {
       if (state.activeTool === tool.id) {
-        // Close panel (confirm)
-        stateSnapshot = null;
-        updateState({ activeTool: 'none', stickerEditOnly: false });
+        // Already active → collapse panel
+        updateState({ activeTool: 'none' });
       } else {
-        // Open panel (toolbar always opens full panel)
-        takeSnapshot();
-        updateState({ activeTool: tool.id, stickerEditOnly: false });
+        updateState({ activeTool: tool.id, stickerEditOnly: false, selectedOverlayId: null });
       }
     });
     toolbar.appendChild(btn);
@@ -374,280 +345,525 @@ export function createPanel(): HTMLElement {
   return wrapper;
 }
 
+// ===== RENDER PANEL CONTENT =====
 export function renderPanelContent(panelWrapper: HTMLElement): void {
-  const panel = panelWrapper.querySelector('.panel') as HTMLElement;
   const content = panelWrapper.querySelector('.panel-content') as HTMLElement;
-  const titleEl = panelWrapper.querySelector('.panel-header-title') as HTMLElement;
-  const randomBtn = panelWrapper.querySelector('.panel-random-btn') as HTMLElement;
-  if (!panel || !content) return;
+  const subtabs = panelWrapper.querySelector('.panel-subtabs') as HTMLElement;
+  const actionBar = panelWrapper.querySelector('.action-bar') as HTMLElement;
+  const panelSheet = panelWrapper.querySelector('.panel-sheet') as HTMLElement;
+  if (!content || !subtabs || !actionBar) return;
 
-  // Update toolbar active states
+  // Update toolbar active states + icon swap
   const toolBtns = panelWrapper.querySelectorAll('.toolbar-btn');
   toolBtns.forEach(btn => {
     const toolId = (btn as HTMLElement).dataset.tool;
-    btn.classList.toggle('active', toolId === state.activeTool);
+    const isActive = toolId === state.activeTool;
+    btn.classList.toggle('active', isActive);
+    // Swap icon class for fill/line variant
+    const iconEl = btn.querySelector('.toolbar-icon');
+    if (iconEl && toolId) {
+      const toolDef = TOOLS.find(t => t.id === toolId);
+      if (toolDef) {
+        iconEl.className = `toolbar-icon ${isActive ? toolDef.activeIconClass : toolDef.iconClass}`;
+      }
+    }
   });
 
-  // Show/hide panel
-  const isOpen = state.activeTool !== 'none';
-  panel.classList.toggle('panel-hidden', !isOpen);
+  // Collapse: hide panel sheet when no tool active
+  if (panelSheet) {
+    panelSheet.classList.toggle('collapsed', state.activeTool === 'none');
+  }
+  if (state.activeTool === 'none') return;
 
-  if (!isOpen) return;
+  const activeTool = state.activeTool;
 
+  // Clear dynamic sections
   clearEl(content);
+  clearEl(subtabs);
+  clearEl(actionBar);
 
-  // Set title
-  const toolDef = TOOLS.find(t => t.id === state.activeTool);
-  if (titleEl && toolDef) titleEl.textContent = toolDef.label;
+  // --- Render action bar ---
+  renderActionBar(actionBar, activeTool);
 
-  // Show random button only for full sticker panel (not edit-only)
-  if (randomBtn) {
-    randomBtn.classList.toggle('panel-btn-hidden', state.activeTool !== 'sticker' || state.stickerEditOnly);
-    // Re-attach click handler (clone trick to remove old listeners)
-    const newRandomBtn = randomBtn.cloneNode(true) as HTMLElement;
-    randomBtn.replaceWith(newRandomBtn);
-    newRandomBtn.addEventListener('click', () => {
-      const canvasSize = getReferenceCanvasSize();
-      const composition = generateRandomComposition(canvasSize.w, canvasSize.h);
-      if (composition.length > 0) {
-        updateState({
-          stickers: composition,
-          selectedStickerId: null,
+  // --- Render sub-tabs ---
+  if (activeTool === 'adjust') {
+    for (const tab of ADJUST_SUBTABS) {
+      const btn = el('button', {
+        className: `panel-subtab ${state.adjustSubTab === tab.id ? 'active' : ''}`,
+      });
+      btn.textContent = tab.label;
+      btn.addEventListener('click', () => {
+        updateState({ adjustSubTab: tab.id });
+      });
+      subtabs.appendChild(btn);
+    }
+  } else if (activeTool === 'sticker') {
+    if (state.stickerEditOnly) {
+      // Edit mode sub-tabs: 点样 | 色板 | 透明度
+      const editTabs = [
+        { id: 'dots', label: '点样' },
+        { id: 'palette', label: '色板' },
+        { id: 'opacity', label: '透明度' },
+      ];
+      for (const tab of editTabs) {
+        const btn = el('button', {
+          className: `panel-subtab ${state.stickerEditTab === tab.id ? 'active' : ''}`,
         });
+        btn.textContent = tab.label;
+        btn.addEventListener('click', () => {
+          updateState({ stickerEditTab: tab.id });
+        });
+        subtabs.appendChild(btn);
       }
-    });
+    } else {
+      // Library mode sub-tabs: 边框 | 花束 | 植物 | ...
+      const tabsLeft = el('div', { className: 'subtabs-left' });
+      for (const group of LIBRARY_GROUPS) {
+        const btn = el('button', {
+          className: `panel-subtab ${state.stickerLibraryTab === group.name ? 'active' : ''}`,
+        });
+        btn.textContent = group.name;
+        btn.addEventListener('click', () => updateState({ stickerLibraryTab: group.name }));
+        tabsLeft.appendChild(btn);
+      }
+      subtabs.appendChild(tabsLeft);
+    }
+  } else if (activeTool === 'canvas') {
+    if (state.selectedOverlayId) {
+      // Overlay edit mode: "形状" | "透明度" tabs
+      const editTabs = [
+        { id: 'shape', label: '形状' },
+        { id: 'opacity', label: '透明度' },
+      ];
+      for (const tab of editTabs) {
+        const btn = el('button', {
+          className: `panel-subtab ${state.overlayEditTab === tab.id ? 'active' : ''}`,
+        });
+        btn.textContent = tab.label;
+        btn.addEventListener('click', () => {
+          updateState({ overlayEditTab: tab.id });
+        });
+        subtabs.appendChild(btn);
+      }
+    }
   }
 
-  // Show template button only for full sticker panel
-  const templateBtnEl = panelWrapper.querySelector('.panel-template-btn') as HTMLElement;
-  if (templateBtnEl) {
-    const hasTemplates = getSavedTemplates().length > 0;
-    templateBtnEl.classList.toggle('panel-btn-hidden', state.activeTool !== 'sticker' || state.stickerEditOnly || !hasTemplates);
-    const newTemplateBtn = templateBtnEl.cloneNode(true) as HTMLElement;
-    templateBtnEl.replaceWith(newTemplateBtn);
-    newTemplateBtn.addEventListener('click', () => {
-      applyRandomTemplate();
-    });
-  }
-
-  // Show area buttons (自动/画笔) only for adjust panel + partial mode
-  const showAreaBtns = state.activeTool === 'adjust' && state.effectMode === 'partial';
-  panelWrapper.querySelectorAll('.panel-area-btn').forEach(btn => {
-    const b = btn as HTMLElement;
-    // Clone to remove old listeners
-    const newBtn = b.cloneNode(true) as HTMLElement;
-    b.replaceWith(newBtn);
-    // Apply visibility AFTER clone
-    newBtn.classList.toggle('panel-btn-hidden', !showAreaBtns);
-    newBtn.classList.toggle('active', newBtn.dataset.area === state.partial.target);
-    newBtn.addEventListener('click', () => {
-      const area = newBtn.dataset.area as 'auto' | 'brush';
-      updateState({ subjectMask: null, subjectLoading: false, subjectError: null });
-      if (area === 'brush') {
-        updateState({ brushActive: true });
-      } else if (area === 'auto' && state.sourceImage) {
-        triggerSegmentation(state.sourceImage);
-      }
-      updatePartial({ target: area });
-    });
-  });
-
-  switch (state.activeTool) {
+  // --- Render content ---
+  switch (activeTool) {
     case 'adjust':
-      renderAdjustPanel(content);
+      renderAdjustContent(content);
       break;
     case 'sticker':
-      renderStickerPanel(content);
+      renderStickerContent(content);
       break;
     case 'canvas':
-      renderCanvasPanel(content);
+      renderCanvasContent(content);
       break;
   }
 }
 
-// ===== ADJUST PANEL =====
-function renderAdjustPanel(container: HTMLElement): void {
-  // Effect mode selector: off / partial / full
-  container.appendChild(createChipGroup('效果', [
-    { value: 'off', label: '关闭' },
-    { value: 'partial', label: '局部' },
-    { value: 'full', label: '全图' },
-  ], state.effectMode, (v) => {
-    updateState({
-      effectMode: v as any,
-      subjectMask: null,
-      brushMask: null,
-      eraserMask: null,
-      subjectLoading: false,
-      subjectError: null,
-    });
-    // Auto-trigger segmentation for partial auto mode
-    if (v === 'partial' && state.partial.target === 'auto' && state.sourceImage) {
-      triggerSegmentation(state.sourceImage);
-    }
-  }));
-
-  // Status banner for auto segmentation
-  if (state.effectMode === 'partial' && state.partial.target === 'auto') {
-    if (state.subjectLoading) {
-      const banner = el('div', { className: 'status-banner status-loading' }, ['正在识别主体...']);
-      container.appendChild(banner);
-    } else if (state.subjectError) {
-      const banner = el('div', { className: 'status-banner status-error' });
-      const msg = el('span', {}, [`识别失败: ${state.subjectError}`]);
-      const retryBtn = el('button', { className: 'banner-btn' }, ['重试']);
-      retryBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (state.sourceImage) triggerSegmentation(state.sourceImage);
-      });
-      banner.appendChild(msg);
-      banner.appendChild(retryBtn);
-      container.appendChild(banner);
-    }
-  }
-
-  if (state.effectMode === 'partial') {
-    renderPartialControls(container);
-  } else if (state.effectMode === 'full') {
-    renderFullControls(container);
-  }
-}
-
-function renderPartialControls(container: HTMLElement): void {
-  // Effect presets (模版效果)
-  container.appendChild(renderEffectPresets());
-
-  // Unified style grid (charsets + symbol sets combined)
-  container.appendChild(renderStyleGrid());
-
-  // Color palette + swatches (like canvas panel)
-  container.appendChild(createChipGroup('色板', [
-    { value: 'photo', label: '原图选色' },
-    { value: 'dream', label: '千禧梦境' },
-    { value: 'happy', label: '开心五彩' },
-    { value: 'nature', label: '自然色系' },
-    { value: 'neon', label: '亚比荧光' },
-  ], state.partial.palette, (v) => {
-    // Clicking a palette chip → multi-color mode (uses all palette colors)
-    updatePartial({ palette: v, colorMode: 'multi' });
-  }));
-
-  container.appendChild(renderPartialColorSwatches());
-
-  container.appendChild(createToggle('反转', state.partial.invert, (v) => updatePartial({ invert: v })));
-
-  // --- Icon-based parameter adjustment ---
-  const params = [
-    { id: 'density', label: '密度', icon: '▦' },
-    { id: 'size', label: '大小', icon: '⊡' },
-    { id: 'glow', label: '辉光', icon: '✧' },
-    ...(state.partial.target === 'brush' ? [{ id: 'brushSize', label: '画笔', icon: '◉' }] : []),
-    { id: 'eraserSize', label: '橡皮', icon: '◎' },
-  ];
-
-  container.appendChild(renderParamIcons(params));
-}
-
-function renderFullControls(container: HTMLElement): void {
-  // Style chips
-  container.appendChild(createChipGroup('颜色', [
-    { value: 'original', label: '原色' },
-    { value: 'mono', label: '单色' },
-  ], state.full.colorMode, (v) => updateFull({ colorMode: v as ColorMode })));
-
-  if (state.full.colorMode === 'mono') {
-    container.appendChild(createColorPicker('字符颜色', state.full.monoColor, (v) => updateFull({ monoColor: v })));
-  }
-
-  container.appendChild(createChipGroup('背景', [
-    { value: 'solid', label: '纯色' },
-    { value: 'gradient', label: '渐变' },
-    { value: 'transparent', label: '透明' },
-  ], state.full.background, (v) => updateFull({ background: v as BackgroundMode })));
-
-  if (state.full.background === 'solid') {
-    container.appendChild(createColorPicker('背景色', state.full.bgColor, (v) => updateFull({ bgColor: v })));
-  }
-  if (state.full.background === 'gradient') {
-    container.appendChild(createColorPicker('颜色1', state.full.bgGradient[0], (v) => updateFull({ bgGradient: [v, state.full.bgGradient[1]] })));
-    container.appendChild(createColorPicker('颜色2', state.full.bgGradient[1], (v) => updateFull({ bgGradient: [state.full.bgGradient[0], v] })));
-    container.appendChild(createSlider('方向', 0, 360, state.full.bgGradientDirection, 1, (v) => updateFull({ bgGradientDirection: v })));
-  }
-
-  container.appendChild(createChipGroup('字符集', [
-    { value: 'standard', label: '标准' },
-    { value: 'shades', label: '阴影' },
-    { value: 'dots', label: '圆点' },
-    { value: 'steps', label: '阶梯' },
-    { value: 'complex', label: '复杂' },
-  ], state.full.charset, (v) => updateFull({ charset: v as CharsetName })));
-
-  // --- Icon-based parameter adjustment ---
-  const params = [
-    { id: 'density', label: '密度', icon: '▦' },
-    { id: 'brightness', label: '亮度', icon: '☀' },
-    { id: 'contrast', label: '对比', icon: '◑' },
-    { id: 'glow', label: '辉光', icon: '✧' },
-    { id: 'eraserSize', label: '橡皮', icon: '◎' },
-  ];
-
-  container.appendChild(renderParamIcons(params));
-}
-
-// === Effect Presets (模版效果) ===
-interface EffectPreset {
-  id: string;
-  name: string;
-  density: number;
-  size: number;
-  glow: number;
-  colorMode: 'mono' | 'multi';
-  monoColor: string;
-  palette?: string;
-}
-
-const EFFECT_PRESETS: EffectPreset[] = [
-  { id: 'white-glow', name: '纯白辉光', density: 30, size: 85, glow: 4, colorMode: 'mono', monoColor: '#ffffff' },
+// ===== OVERLAY SHAPES =====
+const OVERLAY_SHAPES: { id: OverlayShape; label: string }[] = [
+  { id: 'circle', label: '●' },
+  { id: 'roundedSquare', label: '▢' },
+  { id: 'square', label: '■' },
+  { id: 'heart', label: '♥' },
+  { id: 'star', label: '★' },
+  { id: 'hexagon', label: '⬡' },
+  { id: 'diamond', label: '◆' },
+  { id: 'rectangle', label: '▬' },
 ];
 
-function renderEffectPresets(): HTMLElement {
-  const wrapper = el('div', { className: 'style-grid-wrapper' });
-  const row = el('div', { className: 'style-grid' });
-
-  for (const preset of EFFECT_PRESETS) {
-    const card = el('button', { className: 'style-card' });
-    const nameEl = el('span', { className: 'style-card-name' }, [preset.name]);
-    card.appendChild(nameEl);
-    card.addEventListener('click', () => {
-      updatePartial({
-        density: preset.density,
-        size: preset.size,
-        glow: preset.glow,
-        colorMode: preset.colorMode,
-        monoColor: preset.monoColor,
-        ...(preset.palette ? { palette: preset.palette } : {}),
-      });
+function loadOverlayImage(file: File): void {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    URL.revokeObjectURL(url);
+    const overlay: OverlayInstance = {
+      id: uid(),
+      image: img,
+      x: 0.5,
+      y: 0.5,
+      scale: 1,
+      rotation: 0,
+      shape: 'circle',
+      opacity: 1,
+    };
+    pushUndo();
+    updateState({
+      overlayImages: [...state.overlayImages, overlay],
+      selectedOverlayId: overlay.id,
     });
-    row.appendChild(card);
-  }
-
-  wrapper.appendChild(row);
-  return wrapper;
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+  };
+  img.src = url;
 }
 
-// === Unified Style Grid (charsets + symbol sets) ===
+// ===== ACTION BAR (each mode fully self-contained) =====
+function renderActionBar(actionBar: HTMLElement, activeTool: EditorTool): void {
+  const isLoading = state.subjectLoading;
+
+  if (activeTool === 'adjust') {
+    // "惊喜一下 | ↩ | 清空" pill (right-aligned)
+    actionBar.appendChild(createActionPill(isLoading, () => { pushUndo(); randomizeEffect(); }, () => {
+      pushUndo();
+      updatePartial({
+        effect: 'symbols',
+        colorMode: 'mono',
+        monoColor: '#00ff41',
+        palette: 'photo',
+        density: 30,
+        size: 100,
+        glow: 0,
+        opacity: 100,
+        charset: 'standard',
+        symbolSetId: 'tech',
+        invert: false,
+      });
+      updateState({ effectMode: 'off', eraserMask: null });
+    }));
+  } else if (activeTool === 'sticker') {
+    if (state.stickerEditOnly) {
+      // "新增贴纸" left-aligned button
+      const addBtn = el('button', { className: 'action-add-sticker-btn' }, ['新增贴纸']);
+      addBtn.addEventListener('click', () => {
+        updateState({ stickerEditOnly: false, selectedStickerId: null });
+      });
+      actionBar.appendChild(addBtn);
+    } else {
+      // Same pill — clear removes all stickers
+      actionBar.appendChild(createActionPill(false, () => { pushUndo(); applyRandomTemplate(); }, () => {
+        pushUndo();
+        updateState({ stickers: [], selectedStickerId: null });
+      }));
+    }
+  } else if (activeTool === 'canvas') {
+    // "添加图片" pill (replaces "惊喜一下" in crop tab)
+    const pill = el('div', { className: 'action-pill' });
+
+    const addBtn = el('button', { className: 'action-pill-btn' });
+    const addIcon = el('i', { className: 'ri-image-add-line' });
+    const addText = el('span', {}, ['添加图片']);
+    addBtn.appendChild(addIcon);
+    addBtn.appendChild(addText);
+    addBtn.addEventListener('click', () => {
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = 'image/*';
+      fileInput.addEventListener('change', () => {
+        const file = fileInput.files?.[0];
+        if (file) loadOverlayImage(file);
+      });
+      fileInput.click();
+    });
+    pill.appendChild(addBtn);
+
+    const d1 = el('span', { className: 'action-pill-divider' });
+    pill.appendChild(d1);
+
+    const undoBtn = el('button', { className: 'action-pill-icon' });
+    undoBtn.appendChild(el('i', { className: 'ri-arrow-go-back-line' }));
+    undoBtn.addEventListener('click', () => doUndo());
+    pill.appendChild(undoBtn);
+
+    const d2 = el('span', { className: 'action-pill-divider' });
+    pill.appendChild(d2);
+
+    const clearBtn = el('button', { className: `action-pill-icon ${state.overlayImages.length === 0 ? 'disabled' : ''}` });
+    clearBtn.appendChild(el('i', { className: 'ri-delete-bin-line' }));
+    clearBtn.addEventListener('click', () => {
+      if (state.overlayImages.length === 0) return;
+      showConfirmDialog('确定清空所有叠加图片吗？', () => {
+        pushUndo();
+        updateState({ overlayImages: [], selectedOverlayId: null });
+      });
+    });
+    pill.appendChild(clearBtn);
+
+    actionBar.appendChild(pill);
+  }
+}
+
+/** Shared "惊喜一下 | ↩ | 清空" pill component */
+function createActionPill(disabled: boolean, onSurprise: () => void, onClear: () => void): HTMLElement {
+  const pill = el('div', { className: 'action-pill' });
+
+  const surpriseBtn = el('button', { className: `action-pill-btn ${disabled ? 'disabled' : ''}` });
+  const sparkIcon = el('i', { className: 'ri-sparkling-line' });
+  const sparkText = el('span', {}, ['惊喜一下']);
+  surpriseBtn.appendChild(sparkIcon);
+  surpriseBtn.appendChild(sparkText);
+  if (!disabled) surpriseBtn.addEventListener('click', onSurprise);
+  pill.appendChild(surpriseBtn);
+
+  const d1 = el('span', { className: 'action-pill-divider' });
+  pill.appendChild(d1);
+
+  const undoBtn = el('button', { className: `action-pill-icon ${disabled ? 'disabled' : ''}` });
+  undoBtn.appendChild(el('i', { className: 'ri-arrow-go-back-line' }));
+  if (!disabled) undoBtn.addEventListener('click', () => doUndo());
+  pill.appendChild(undoBtn);
+
+  const d2 = el('span', { className: 'action-pill-divider' });
+  pill.appendChild(d2);
+
+  const clearBtn = el('button', { className: `action-pill-icon ${disabled ? 'disabled' : ''}` });
+  clearBtn.appendChild(el('i', { className: 'ri-delete-bin-line' }));
+  if (!disabled) clearBtn.addEventListener('click', () => {
+    showConfirmDialog('确定清空当前效果吗？', onClear);
+  });
+  pill.appendChild(clearBtn);
+
+  return pill;
+}
+
+// ===== RANDOMIZE EFFECT =====
+function randomizeEffect(): void {
+  const randomStyle = STYLE_OPTIONS[Math.floor(Math.random() * STYLE_OPTIONS.length)];
+  const palettes = ['photo', 'dream', 'happy', 'nature', 'neon'];
+  const randomPalette = palettes[Math.floor(Math.random() * palettes.length)];
+  const randomDensity = 15 + Math.floor(Math.random() * 55);
+  const randomSize = 60 + Math.floor(Math.random() * 120);
+
+  if (randomStyle.type === 'ascii') {
+    updatePartial({
+      effect: 'ascii',
+      charset: randomStyle.id as any,
+      palette: randomPalette,
+      colorMode: 'multi',
+      density: randomDensity,
+      size: randomSize,
+      glow: 0,
+    });
+  } else {
+    updatePartial({
+      effect: 'symbols',
+      symbolSetId: randomStyle.id,
+      palette: randomPalette,
+      colorMode: 'multi',
+      density: randomDensity,
+      size: randomSize,
+      glow: 0,
+    });
+  }
+
+  if (state.effectMode === 'off') {
+    updateState({ effectMode: 'partial' });
+    if (state.sourceImage) triggerSegmentation(state.sourceImage);
+  }
+}
+
+// ===== ADJUST TAB CONTENT =====
+function renderAdjustContent(container: HTMLElement): void {
+  switch (state.adjustSubTab) {
+    case 'dots':
+      renderDotsTab(container);
+      break;
+    case 'palette':
+      renderPaletteTab(container);
+      break;
+    case 'otherParams':
+      renderOtherParamsTab(container);
+      break;
+  }
+}
+
+// --- Sub-tab: 点样 ---
+function renderDotsTab(container: HTMLElement): void {
+  container.appendChild(renderStyleGrid());
+}
+
+// --- Sub-tab: 色板 ---
+function renderPaletteTab(container: HTMLElement): void {
+  // Color swatch row (single colors)
+  container.appendChild(renderPartialColorSwatches());
+
+  // Palette preset cards
+  container.appendChild(renderPaletteCards());
+}
+
+// --- Sub-tab: 其他参数 ---
+function renderOtherParamsTab(container: HTMLElement): void {
+  const paramsWrapper = el('div', { className: 'params-all-sliders' });
+
+  // All sliders visible at once
+  paramsWrapper.appendChild(createSlider('密度', 10, 80, state.partial.density, 1, (v) => {
+    updateState({ subjectMask: null });
+    updatePartial({ density: v });
+  }));
+
+  paramsWrapper.appendChild(createSlider('大小', 50, 200, state.partial.size, 5, (v) => updatePartial({ size: v })));
+
+  paramsWrapper.appendChild(createSlider('透明度', 10, 100, state.partial.opacity, 1, (v) => updatePartial({ opacity: v })));
+
+  container.appendChild(paramsWrapper);
+
+  // Toggle row: 抠图 (ON=背景效果) + 背景图 (ON=保留原图)
+  const toggleRow = el('div', { className: 'toggle-row' });
+  toggleRow.appendChild(createToggle('抠图', state.partial.segEnabled, (v) => {
+    updatePartial({ segEnabled: v });
+    if (v && state.sourceImage && !state.subjectMask && !state.subjectLoading) {
+      triggerSegmentation(state.sourceImage);
+    }
+    if (!v) {
+      // Clear mask when disabled
+      updateState({ subjectMask: null, subjectLoading: false, subjectError: null });
+    }
+  }));
+  toggleRow.appendChild(createToggle('背景图', state.partial.bgImageEnabled, (v) => {
+    updatePartial({ bgImageEnabled: v });
+  }));
+  container.appendChild(toggleRow);
+}
+
+// ===== STICKER TAB =====
+function renderStickerContent(container: HTMLElement): void {
+  if (state.stickerEditOnly) {
+    // Edit mode: only editing controls, NO sticker grid below
+    switch (state.stickerEditTab) {
+      case 'dots':
+        container.appendChild(createChipGroup('效果', [
+          { value: 'dots', label: 'Dots' },
+          { value: 'ascii', label: 'ASCII' },
+        ], state.stickerMode, (v) => {
+          clearEffectCache();
+          updateState({ stickerMode: v as StickerMode });
+          const stickers = state.stickers.map(s => ({ ...s, mode: v as StickerMode }));
+          updateState({ stickers });
+        }));
+        break;
+      case 'palette':
+        // Same layout as adjust 色板: palette cards + color swatches
+        container.appendChild(renderStickerPaletteCards());
+        container.appendChild(renderColorSwatches());
+        break;
+      case 'opacity':
+        container.appendChild(createSlider('透明度', 10, 100, state.stampOpacity, 1, (v) => {
+          updateState({ stampOpacity: v });
+          if (state.selectedStickerId) {
+            const stickers = state.stickers.map(s =>
+              s.id === state.selectedStickerId ? { ...s, opacity: v / 100 } : s
+            );
+            updateState({ stickers });
+          }
+        }));
+        break;
+    }
+  } else {
+    // Library mode: sticker grid
+    const sections = getLibraryForGroup(state.stickerLibraryTab);
+    for (const { section, items } of sections) {
+      if (sections.length > 1) {
+        const sectionTitle = el('div', { className: 'control-label sticker-section-label' }, [section.title]);
+        container.appendChild(sectionTitle);
+      }
+
+      const grid = el('div', { className: 'sticker-grid' });
+      for (const asset of items) {
+        const btn = el('button', { className: 'sticker-btn', title: `${section.title} ${asset.name}` });
+        const img = el('img', { src: getStickerPreviewUrl(asset), alt: asset.name });
+        btn.appendChild(img);
+        btn.addEventListener('click', () => {
+          pushUndo();
+          addStickerFromAsset(asset);
+        });
+        grid.appendChild(btn);
+      }
+      container.appendChild(grid);
+    }
+
+    if (state.stickers.length > 0) {
+      container.appendChild(createButton('保存为模版', () => {
+        saveCurrentAsTemplate();
+      }, 'btn-secondary'));
+    }
+  }
+}
+// ===== CANVAS TAB =====
+function renderCanvasContent(container: HTMLElement): void {
+  // Overlay edit mode: show shape or opacity controls
+  if (state.selectedOverlayId) {
+    const selectedOverlay = state.overlayImages.find(o => o.id === state.selectedOverlayId);
+    if (!selectedOverlay) return;
+
+    if (state.overlayEditTab === 'shape') {
+      // Shape chips in content area
+      const row = el('div', { className: 'chip-row' });
+      for (const shape of OVERLAY_SHAPES) {
+        const isActive = selectedOverlay.shape === shape.id;
+        const chip = el('button', { className: `chip ${isActive ? 'active' : ''}` }, [shape.label]);
+        chip.style.fontSize = '1.1rem';
+        chip.style.padding = '10px 14px';
+        chip.addEventListener('click', () => {
+          pushUndo();
+          const overlays = state.overlayImages.map(o =>
+            o.id === state.selectedOverlayId ? { ...o, shape: shape.id } : o
+          );
+          updateState({ overlayImages: overlays });
+        });
+        row.appendChild(chip);
+      }
+      container.appendChild(row);
+    } else if (state.overlayEditTab === 'opacity') {
+      // Opacity slider
+      const currentOpacity = Math.round((selectedOverlay.opacity ?? 1) * 100);
+      container.appendChild(createSlider('透明度', 10, 100, currentOpacity, 1, (v) => {
+        const overlays = state.overlayImages.map(o =>
+          o.id === state.selectedOverlayId ? { ...o, opacity: v / 100 } : o
+        );
+        updateState({ overlayImages: overlays });
+      }));
+    }
+    return;
+  }
+
+  // Normal canvas mode
+  container.appendChild(createChipGroup('画布比例', [
+    { value: 'original', label: '原始' },
+    { value: '1:1', label: '1:1' },
+    { value: '4:5', label: '4:5' },
+    { value: '3:4', label: '3:4' },
+    { value: '9:16', label: '9:16' },
+    { value: '16:9', label: '16:9' },
+    { value: '4:3', label: '4:3' },
+  ], state.canvasRatio, (v) => {
+    updateState({
+      canvasRatio: v as CanvasRatio,
+      photoX: 0.5,
+      photoY: 0.5,
+      photoScale: 1,
+      subjectMask: null,
+      eraserMask: null,
+    });
+  }));
+
+  if (state.canvasRatio !== 'original') {
+    container.appendChild(createChipGroup('背景色板', [
+      { value: 'photo', label: '原图选色' },
+      { value: 'dream', label: '千禧梦境' },
+      { value: 'happy', label: '开心五彩' },
+      { value: 'nature', label: '自然色系' },
+      { value: 'neon', label: '亚比荧光' },
+    ], state.canvasBgPalette, (v) => {
+      updateState({ canvasBgPalette: v, canvasBgColor: '' });
+    }));
+
+    container.appendChild(renderCanvasBgSwatches());
+  }
+}
+
+// ===== HELPER: Style Grid =====
 interface StyleOption {
   id: string;
   type: 'ascii' | 'symbols';
   name: string;
-  preview: string; // characters to show in the card
+  preview: string;
 }
 
 const STYLE_OPTIONS: StyleOption[] = [
   { id: 'standard', type: 'ascii', name: '标准', preview: '.:-=+*#%@' },
-  { id: 'shades', type: 'ascii', name: '阴影', preview: '.░▒▓█' },
-  { id: 'dots', type: 'ascii', name: '圆点', preview: '·•●○◌◎' },
-  { id: 'steps', type: 'ascii', name: '阶梯', preview: '▁▂▃▄▅▆▇█' },
   { id: 'complex', type: 'ascii', name: '复杂', preview: ".:;Il!i~+_?" },
   { id: 'tech', type: 'symbols', name: '科技', preview: '✦+○×·★' },
   { id: 'nature', type: 'symbols', name: '自然', preview: '✿❀✾❁✻·' },
@@ -677,10 +893,15 @@ function renderStyleGrid(): HTMLElement {
     card.appendChild(nameEl);
 
     card.addEventListener('click', () => {
+      pushUndo();
       if (style.type === 'ascii') {
         updatePartial({ effect: 'ascii', charset: style.id as any });
       } else {
         updatePartial({ effect: 'symbols', symbolSetId: style.id });
+      }
+      if (state.effectMode === 'off') {
+        updateState({ effectMode: 'partial' });
+        if (state.sourceImage) triggerSegmentation(state.sourceImage);
       }
     });
 
@@ -691,168 +912,48 @@ function renderStyleGrid(): HTMLElement {
   return wrapper;
 }
 
-/** Render icon-based slider UI: icons row + active slider above */
-function renderParamIcons(params: { id: string; label: string; icon: string }[]): HTMLElement {
-  const wrapper = el('div', { className: 'param-icons-wrapper' });
+// ===== HELPER: Palette Cards =====
+function renderPaletteCards(): HTMLElement {
+  const wrapper = el('div', { className: 'palette-cards-wrapper' });
 
-  // Slider area (only shows for selected param)
-  const sliderArea = el('div', { className: 'param-slider-area' });
-  const activeParam = params.find(p => p.id === state.adjustParam) || params[0];
+  const palettes = [
+    { id: 'dream', name: '千禧梦境' },
+    { id: 'happy', name: '开心五彩' },
+    { id: 'nature', name: '自然色系' },
+    { id: 'neon', name: '亚比荧光' },
+  ];
 
-  // Render slider for active param
-  const slider = getSliderForParam(activeParam.id);
-  if (slider) sliderArea.appendChild(slider);
-  wrapper.appendChild(sliderArea);
+  const cardsRow = el('div', { className: 'palette-cards-row' });
 
-  // Icons row
-  const iconsRow = el('div', { className: 'param-icons-row' });
-  for (const param of params) {
-    const isActive = param.id === (state.adjustParam || params[0].id);
-    const btn = el('button', { className: `param-icon-btn ${isActive ? 'active' : ''}` });
-    const iconEl = el('span', { className: 'param-icon' }, [param.icon]);
-    const labelEl = el('span', { className: 'param-icon-label' }, [param.label]);
-    btn.appendChild(iconEl);
-    btn.appendChild(labelEl);
-    btn.addEventListener('click', () => {
-      updateState({ adjustParam: param.id });
+  for (const p of palettes) {
+    const isActive = state.partial.palette === p.id && state.partial.colorMode === 'multi';
+    const card = el('button', { className: `palette-card ${isActive ? 'active' : ''}` });
+
+    // 2x3 dot grid preview
+    const dotsGrid = el('div', { className: 'palette-card-dots' });
+    const palette = COLOR_PALETTES.find(cp => cp.id === p.id);
+    const colors = palette ? palette.colors.slice(0, 6) : ['#ccc', '#ccc', '#ccc', '#ccc', '#ccc', '#ccc'];
+    for (const color of colors) {
+      const dot = el('span', { className: 'palette-dot' });
+      dot.style.background = color;
+      dotsGrid.appendChild(dot);
+    }
+    card.appendChild(dotsGrid);
+
+    const nameEl = el('span', { className: 'palette-card-name' }, [p.name]);
+    card.appendChild(nameEl);
+
+    card.addEventListener('click', () => {
+      updatePartial({ palette: p.id, colorMode: 'multi' });
     });
-    iconsRow.appendChild(btn);
+    cardsRow.appendChild(card);
   }
-  wrapper.appendChild(iconsRow);
 
+  wrapper.appendChild(cardsRow);
   return wrapper;
 }
 
-function getSliderForParam(paramId: string): HTMLElement | null {
-  switch (paramId) {
-    // Partial params
-    case 'density':
-      if (state.effectMode === 'partial') {
-        return createSlider('密度', 10, 80, state.partial.density, 1, (v) => {
-          updateState({ subjectMask: null });
-          updatePartial({ density: v });
-        });
-      }
-      return createSlider('密度', 10, 80, state.full.density, 1, (v) => updateFull({ density: v }));
-    case 'size':
-      return createSlider('大小', 50, 200, state.partial.size, 5, (v) => updatePartial({ size: v }));
-    case 'glow':
-      if (state.effectMode === 'partial') {
-        return createSlider('辉光', 0, 40, state.partial.glow, 1, (v) => updatePartial({ glow: v }));
-      }
-      return createSlider('辉光', 0, 20, state.full.glow, 1, (v) => updateFull({ glow: v }));
-    case 'brushSize':
-      return createSlider('画笔大小', 10, 100, state.brushSize, 1, (v) => updateState({ brushSize: v }));
-    case 'eraserSize':
-      return createSlider('橡皮大小', 10, 100, state.eraserSize, 1, (v) => updateState({ eraserSize: v }));
-    // Full params
-    case 'brightness':
-      return createSlider('亮度', -100, 100, state.full.brightness, 1, (v) => updateFull({ brightness: v }));
-    case 'contrast':
-      return createSlider('对比度', -100, 100, state.full.contrast, 1, (v) => updateFull({ contrast: v }));
-    default:
-      return null;
-  }
-}
-
-// ===== STICKER PANEL =====
-function renderStickerPanel(container: HTMLElement): void {
-  if (state.stickerEditOnly) {
-    // ---- Edit mode: only adjust controls for selected sticker ----
-    // Render mode
-    container.appendChild(createChipGroup('效果', [
-      { value: 'dots', label: 'Dots' },
-      { value: 'ascii', label: 'ASCII' },
-    ], state.stickerMode, (v) => {
-      clearEffectCache();
-      updateState({ stickerMode: v as StickerMode });
-      const stickers = state.stickers.map(s => ({ ...s, mode: v as StickerMode }));
-      updateState({ stickers });
-    }));
-
-    // Palette selector
-    container.appendChild(createChipGroup('色板', [
-      { value: 'photo', label: '原图选色' },
-      { value: 'dream', label: '千禧梦境' },
-      { value: 'happy', label: '开心五彩' },
-      { value: 'nature', label: '自然色系' },
-      { value: 'neon', label: '亚比荧光' },
-    ], state.stickerPalette, (v) => {
-      clearEffectCache();
-      updateState({ stickerPalette: v, stickerColor: '' });
-    }));
-
-    // Color swatches for current palette + black/white + custom
-    container.appendChild(renderColorSwatches());
-
-    // Opacity
-    container.appendChild(createSlider('透明度', 10, 100, state.stampOpacity, 1, (v) => {
-      updateState({ stampOpacity: v });
-      if (state.selectedStickerId) {
-        const stickers = state.stickers.map(s =>
-          s.id === state.selectedStickerId ? { ...s, opacity: v / 100 } : s
-        );
-        updateState({ stickers });
-      }
-    }));
-  } else {
-    // ---- Full mode: library + clear ----
-    // Category tabs
-    container.appendChild(createChipGroup('', LIBRARY_GROUPS.map(g => ({
-      value: g.name,
-      label: g.name,
-    })), state.stickerLibraryTab, (v) => updateState({ stickerLibraryTab: v })));
-
-    // Sticker grid
-    const sections = getLibraryForGroup(state.stickerLibraryTab);
-    for (const { section, items } of sections) {
-      if (sections.length > 1) {
-        const sectionTitle = el('div', { className: 'control-label sticker-section-label' }, [section.title]);
-        container.appendChild(sectionTitle);
-      }
-
-      const grid = el('div', { className: 'sticker-grid' });
-      for (const asset of items) {
-        const btn = el('button', { className: 'sticker-btn', title: `${section.title} ${asset.name}` });
-        const img = el('img', { src: getStickerPreviewUrl(asset), alt: asset.name });
-        btn.appendChild(img);
-        btn.addEventListener('click', () => addStickerFromAsset(asset));
-        grid.appendChild(btn);
-      }
-      container.appendChild(grid);
-    }
-
-    // Save as template
-    if (state.stickers.length > 0) {
-      container.appendChild(createButton('保存为模版', () => {
-        saveCurrentAsTemplate();
-      }, 'btn-secondary'));
-    }
-
-    // Export templates
-    if (getSavedTemplates().length > 0) {
-      container.appendChild(createButton('导出模版', () => {
-        const json = JSON.stringify(getSavedTemplates(), null, 2);
-        const textarea = document.createElement('textarea');
-        textarea.value = json;
-        textarea.style.cssText = 'position:fixed;top:10%;left:5%;width:90%;height:60%;z-index:9999;font-size:11px;padding:12px;border-radius:12px;border:2px solid #2B2BD4;background:#fff;';
-        const closeBtn = document.createElement('button');
-        closeBtn.textContent = '关闭';
-        closeBtn.style.cssText = 'position:fixed;top:5%;right:5%;z-index:10000;padding:8px 20px;background:#2B2BD4;color:#fff;border:none;border-radius:20px;font-size:14px;';
-        closeBtn.onclick = () => { textarea.remove(); closeBtn.remove(); };
-        document.body.appendChild(textarea);
-        document.body.appendChild(closeBtn);
-        textarea.select();
-      }, 'btn-secondary'));
-    }
-
-    // Clear all
-    container.appendChild(createButton('全部清除', () => {
-      updateState({ stickers: [], selectedStickerId: null });
-    }, 'btn-secondary'));
-  }
-}
-
+// ===== HELPER: Partial Color Swatches =====
 function applyPartialColor(color: string): void {
   updatePartial({ colorMode: 'mono', monoColor: color });
 }
@@ -871,6 +972,22 @@ function renderPartialColorSwatches(): HTMLElement {
 
   const isMono = state.partial.colorMode === 'mono';
   const row = el('div', { className: 'color-swatch-row' });
+
+  // "+" add button first
+  const addBtn = el('button', { className: 'color-swatch color-swatch-add' }, ['+']);
+  const hiddenInput = el('input', { type: 'color', value: state.partial.monoColor || '#ff0000', className: 'hidden-input' });
+  addBtn.appendChild(hiddenInput);
+  addBtn.addEventListener('click', () => { (hiddenInput as HTMLInputElement).click(); });
+  hiddenInput.addEventListener('input', () => {
+    applyPartialColor((hiddenInput as HTMLInputElement).value);
+  });
+  hiddenInput.addEventListener('change', () => {
+    const v = (hiddenInput as HTMLInputElement).value;
+    if (!state.customColors.includes(v)) {
+      updateState({ customColors: [...state.customColors, v] });
+    }
+  });
+  row.appendChild(addBtn);
 
   for (const color of paletteColors) {
     const isActive = isMono && state.partial.monoColor === color;
@@ -898,25 +1015,11 @@ function renderPartialColorSwatches(): HTMLElement {
     row.appendChild(swatch);
   }
 
-  const addBtn = el('button', { className: 'color-swatch color-swatch-add' }, ['+']);
-  const hiddenInput = el('input', { type: 'color', value: state.partial.monoColor || '#ff0000', className: 'hidden-input' });
-  addBtn.appendChild(hiddenInput);
-  addBtn.addEventListener('click', () => { (hiddenInput as HTMLInputElement).click(); });
-  hiddenInput.addEventListener('input', () => {
-    applyPartialColor((hiddenInput as HTMLInputElement).value);
-  });
-  hiddenInput.addEventListener('change', () => {
-    const v = (hiddenInput as HTMLInputElement).value;
-    if (!state.customColors.includes(v)) {
-      updateState({ customColors: [...state.customColors, v] });
-    }
-  });
-  row.appendChild(addBtn);
-
   wrapper.appendChild(row);
   return wrapper;
 }
 
+// ===== HELPER: Sticker Color Swatches =====
 function applyColorToSelected(color: string): void {
   clearEffectCache();
   updateState({ stickerColor: color });
@@ -928,10 +1031,62 @@ function applyColorToSelected(color: string): void {
   }
 }
 
+/** Sticker palette cards — same format as adjust tab's renderPaletteCards */
+function renderStickerPaletteCards(): HTMLElement {
+  const wrapper = el('div', { className: 'palette-cards-wrapper' });
+  const cardsRow = el('div', { className: 'palette-cards-row' });
+
+  const palettes = [
+    { id: 'photo', name: '原图选色' },
+    { id: 'dream', name: '千禧梦境' },
+    { id: 'happy', name: '开心五彩' },
+    { id: 'nature', name: '自然色系' },
+    { id: 'neon', name: '亚比荧光' },
+  ];
+
+  for (const p of palettes) {
+    const isActive = state.stickerPalette === p.id;
+    const card = el('button', { className: `palette-card ${isActive ? 'active' : ''}` });
+
+    // 2x3 dot grid preview
+    const dotsGrid = el('div', { className: 'palette-card-dots' });
+    if (p.id === 'photo') {
+      // Photo palette: extract colors from source image
+      const img = state.sourceImage;
+      const colors = img ? extractPhotoPalette(img).slice(0, 6) : ['#888', '#aaa', '#666', '#bbb', '#999', '#777'];
+      for (const color of colors) {
+        const dot = el('span', { className: 'palette-dot' });
+        dot.style.background = color;
+        dotsGrid.appendChild(dot);
+      }
+    } else {
+      const palette = COLOR_PALETTES.find(cp => cp.id === p.id);
+      const colors = palette ? palette.colors.slice(0, 6) : ['#ccc', '#ccc', '#ccc', '#ccc', '#ccc', '#ccc'];
+      for (const color of colors) {
+        const dot = el('span', { className: 'palette-dot' });
+        dot.style.background = color;
+        dotsGrid.appendChild(dot);
+      }
+    }
+    card.appendChild(dotsGrid);
+
+    const nameEl = el('span', { className: 'palette-card-name' }, [p.name]);
+    card.appendChild(nameEl);
+
+    card.addEventListener('click', () => {
+      clearEffectCache();
+      updateState({ stickerPalette: p.id, stickerColor: '' });
+    });
+    cardsRow.appendChild(card);
+  }
+
+  wrapper.appendChild(cardsRow);
+  return wrapper;
+}
+
 function renderColorSwatches(): HTMLElement {
   const wrapper = el('div', { className: 'color-swatches-wrapper' });
 
-  // Get palette colors
   let paletteColors: string[];
   if (state.stickerPalette === 'photo') {
     const img = state.sourceImage;
@@ -943,7 +1098,6 @@ function renderColorSwatches(): HTMLElement {
 
   const row = el('div', { className: 'color-swatch-row' });
 
-  // Palette colors
   for (const color of paletteColors) {
     const swatch = el('button', { className: `color-swatch ${state.stickerColor === color ? 'active' : ''}` });
     swatch.style.background = color;
@@ -951,19 +1105,16 @@ function renderColorSwatches(): HTMLElement {
     row.appendChild(swatch);
   }
 
-  // Black
   const black = el('button', { className: `color-swatch ${state.stickerColor === '#000000' ? 'active' : ''}` });
   black.style.background = '#000000';
   black.addEventListener('click', () => applyColorToSelected('#000000'));
   row.appendChild(black);
 
-  // White
   const white = el('button', { className: `color-swatch color-swatch-border ${state.stickerColor === '#ffffff' ? 'active' : ''}` });
   white.style.background = '#ffffff';
   white.addEventListener('click', () => applyColorToSelected('#ffffff'));
   row.appendChild(white);
 
-  // Custom saved colors
   for (const color of state.customColors) {
     const swatch = el('button', { className: `color-swatch ${state.stickerColor === color ? 'active' : ''}` });
     swatch.style.background = color;
@@ -971,7 +1122,6 @@ function renderColorSwatches(): HTMLElement {
     row.appendChild(swatch);
   }
 
-  // "+" custom color picker
   const addBtn = el('button', { className: 'color-swatch color-swatch-add' }, ['+']);
   const hiddenInput = el('input', { type: 'color', value: '#ff0000', className: 'hidden-input' });
   addBtn.appendChild(hiddenInput);
@@ -980,7 +1130,6 @@ function renderColorSwatches(): HTMLElement {
     const v = (hiddenInput as HTMLInputElement).value;
     applyColorToSelected(v);
   });
-  // Save custom color on change (when picker closes)
   hiddenInput.addEventListener('change', () => {
     const v = (hiddenInput as HTMLInputElement).value;
     if (!state.customColors.includes(v)) {
@@ -993,6 +1142,7 @@ function renderColorSwatches(): HTMLElement {
   return wrapper;
 }
 
+// ===== HELPER: Canvas Background Swatches =====
 function applyCanvasBgColor(color: string): void {
   updateState({ canvasBgColor: color });
 }
@@ -1054,8 +1204,8 @@ function renderCanvasBgSwatches(): HTMLElement {
   return wrapper;
 }
 
+// ===== HELPER: Add Sticker =====
 function addStickerFromAsset(asset: StickerAsset): void {
-  // Use reference (full/panel-closed) sizes so displayScale handles shrinking
   const canvasSize = getReferenceCanvasSize();
   const photoSize = getReferencePhotoRect();
   const scale = getDefaultScale(asset, canvasSize.w, canvasSize.h, photoSize.w, photoSize.h);
@@ -1078,47 +1228,39 @@ function addStickerFromAsset(asset: StickerAsset): void {
   updateState({
     stickers: [...state.stickers, sticker],
     selectedStickerId: sticker.id,
+    stickerEditOnly: true, // Auto-enter edit mode after adding
   });
 }
 
-// ===== CANVAS PANEL =====
-function renderCanvasPanel(container: HTMLElement): void {
-  container.appendChild(createChipGroup('画布比例', [
-    { value: 'original', label: '原始' },
-    { value: '1:1', label: '1:1' },
-    { value: '4:5', label: '4:5' },
-    { value: '3:4', label: '3:4' },
-    { value: '9:16', label: '9:16' },
-    { value: '16:9', label: '16:9' },
-    { value: '4:3', label: '4:3' },
-  ], state.canvasRatio, (v) => {
-    updateState({
-      canvasRatio: v as CanvasRatio,
-      photoX: 0.5,
-      photoY: 0.5,
-      photoScale: 1,
-      subjectMask: null,
-      brushMask: null,
-      eraserMask: null,
-    });
-  }));
+// ===== CONFIRM DIALOG (iOS Action Sheet style) =====
+function showConfirmDialog(message: string, onConfirm: () => void): void {
+  const overlay = el('div', { className: 'confirm-overlay' });
+  const dialog = el('div', { className: 'confirm-dialog' });
 
-  if (state.canvasRatio !== 'original') {
-    container.appendChild(createButton('重置位置', () => {
-      updateState({ photoX: 0.5, photoY: 0.5, photoScale: 1 });
-    }, 'btn-secondary'));
+  const msg = el('p', { className: 'confirm-message' }, [message]);
+  dialog.appendChild(msg);
 
-    // Canvas background color
-    container.appendChild(createChipGroup('背景色板', [
-      { value: 'photo', label: '原图选色' },
-      { value: 'dream', label: '千禧梦境' },
-      { value: 'happy', label: '开心五彩' },
-      { value: 'nature', label: '自然色系' },
-      { value: 'neon', label: '亚比荧光' },
-    ], state.canvasBgPalette, (v) => {
-      updateState({ canvasBgPalette: v, canvasBgColor: '' });
-    }));
+  const actions = el('div', { className: 'confirm-actions' });
 
-    container.appendChild(renderCanvasBgSwatches());
-  }
+  const confirmBtn = el('button', { className: 'confirm-btn confirm-destructive' }, ['清空']);
+  confirmBtn.addEventListener('click', () => {
+    onConfirm();
+    overlay.remove();
+  });
+
+  const cancelBtn = el('button', { className: 'confirm-btn confirm-cancel' }, ['取消']);
+  cancelBtn.addEventListener('click', () => {
+    overlay.remove();
+  });
+
+  actions.appendChild(confirmBtn);
+  actions.appendChild(cancelBtn);
+  dialog.appendChild(actions);
+  overlay.appendChild(dialog);
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) overlay.remove();
+  });
+
+  document.getElementById('app')!.appendChild(overlay);
 }

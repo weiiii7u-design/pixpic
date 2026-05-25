@@ -38,7 +38,7 @@ export function renderTextFill(
   if (!text || text.length === 0) return;
 
   const fontSize = Math.max(textFontSize, 10);
-  ctx.font = `bold ${fontSize}px "IBM Plex Mono", monospace`;
+  ctx.font = `bold ${fontSize}px "JetBrains Mono", monospace`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
 

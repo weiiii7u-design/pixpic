@@ -17,18 +17,19 @@ export function renderPartialMode(
 ): void {
   const { partial } = state;
 
-  // 1. Draw the photo as background
-  ctx.drawImage(sourceImg, drawArea.x, drawArea.y, drawArea.w, drawArea.h);
+  // 1. Background layer: draw photo if bgImageEnabled, otherwise solid color
+  if (partial.bgImageEnabled) {
+    ctx.drawImage(sourceImg, drawArea.x, drawArea.y, drawArea.w, drawArea.h);
+  } else {
+    ctx.fillStyle = state.canvasBgColor || '#000000';
+    ctx.fillRect(drawArea.x, drawArea.y, drawArea.w, drawArea.h);
+  }
 
-  // 2. Build mask based on target mode
+  // 2. Segmentation mask (only if segEnabled)
   let mask: boolean[] | null = null;
 
-  if (partial.target === 'brush') {
-    mask = state.brushMask;
-    if (!mask) return;
-
-  } else if (partial.target === 'auto') {
-    // AI segmentation
+  if (partial.segEnabled) {
+    // If loading or error, show photo with overlay indicator
     if (state.subjectError) {
       renderErrorOverlay(ctx, drawArea);
       return;
@@ -40,7 +41,7 @@ export function renderPartialMode(
     }
 
     if (!state.subjectMask) {
-      // Auto-trigger segmentation immediately
+      // Auto-trigger segmentation silently
       triggerSegmentation(sourceImg);
       renderLoadingOverlay(ctx, drawArea);
       return;
@@ -48,6 +49,7 @@ export function renderPartialMode(
 
     mask = mapMaskToGrid(state.subjectMask, partial, drawArea);
   }
+  // If segEnabled is false, mask stays null → effect renders on entire image
 
   // 3. Render effect layer
   switch (partial.effect) {
@@ -83,10 +85,11 @@ function mapMaskToGrid(
     const cellH = cellW * 1.8;
     targetRows = Math.floor(drawArea.h / cellH);
   } else {
-    // symbols: square grid
+    // symbols: use 1.8x vertical spacing (matching renderSymbolsGrid)
     targetCols = partial.density;
     const cellSize = drawArea.w / targetCols;
-    targetRows = Math.floor(drawArea.h / cellSize);
+    const rowSpacing = cellSize * 1.8;
+    targetRows = Math.floor(drawArea.h / rowSpacing);
   }
 
   const result: boolean[] = [];
@@ -132,35 +135,24 @@ export async function triggerSegmentation(sourceImg: HTMLImageElement): Promise<
 }
 
 function renderLoadingOverlay(ctx: CanvasRenderingContext2D, drawArea: DrawArea): void {
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
   ctx.fillRect(drawArea.x, drawArea.y, drawArea.w, drawArea.h);
   ctx.fillStyle = '#ffffff';
-  ctx.font = '14px "Plus Jakarta Sans", sans-serif';
+  ctx.font = '500 14px "JetBrains Mono", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const dots = '.'.repeat(Math.floor(Date.now() / 500) % 4);
   ctx.fillText(`正在识别主体${dots}`, drawArea.x + drawArea.w / 2, drawArea.y + drawArea.h / 2);
-  ctx.font = '11px "Plus Jakarta Sans", sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.fillText('首次需要下载模型，请耐心等待', drawArea.x + drawArea.w / 2, drawArea.y + drawArea.h / 2 + 24);
 }
 
 function renderErrorOverlay(ctx: CanvasRenderingContext2D, drawArea: DrawArea): void {
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
   ctx.fillRect(drawArea.x, drawArea.y, drawArea.w, drawArea.h);
-
-  const cx = drawArea.x + drawArea.w / 2;
-  const cy = drawArea.y + drawArea.h / 2;
-
   ctx.fillStyle = '#ffffff';
-  ctx.font = '14px "Plus Jakarta Sans", sans-serif';
+  ctx.font = '500 14px "JetBrains Mono", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('识别失败', cx, cy - 12);
-
-  ctx.font = '11px "Plus Jakarta Sans", sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.fillText('请在面板中点击「重新识别」', cx, cy + 12);
+  ctx.fillText('识别失败，点击重试', drawArea.x + drawArea.w / 2, drawArea.y + drawArea.h / 2);
 }
 
 function renderPartialAscii(
@@ -203,14 +195,11 @@ function renderMonoColorAscii(
   const imageData = sCtx.getImageData(0, 0, cols, rows);
   const pixels = imageData.data;
 
-  if (partial.glow > 0) {
-    ctx.shadowBlur = partial.glow;
-    ctx.shadowColor = partial.monoColor;
-  }
+  ctx.globalAlpha = (partial.opacity || 100) / 100;
 
   const sizeScale = (partial.size || 100) / 100;
   const fontSize = Math.max(cellW * 1.2 * sizeScale, 4);
-  ctx.font = `${fontSize}px "IBM Plex Mono", monospace`;
+  ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = partial.monoColor;
@@ -235,7 +224,7 @@ function renderMonoColorAscii(
     }
   }
 
-  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
 }
 
 /** Render ASCII characters with random colors from a palette */
@@ -263,15 +252,11 @@ function renderMultiColorAscii(
   const imageData = sCtx.getImageData(0, 0, cols, rows);
   const pixels = imageData.data;
 
-  // Glow
-  if (partial.glow > 0) {
-    ctx.shadowBlur = partial.glow;
-    ctx.shadowColor = palette[0] || '#ffffff';
-  }
+  ctx.globalAlpha = (partial.opacity || 100) / 100;
 
   const sizeScale = (partial.size || 100) / 100;
   const fontSize = Math.max(cellW * 1.2 * sizeScale, 4);
-  ctx.font = `${fontSize}px "IBM Plex Mono", monospace`;
+  ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -300,7 +285,7 @@ function renderMultiColorAscii(
       ctx.fillText(char, cx, cy);
     }
   }
-  ctx.shadowBlur = 0;
+  ctx.globalAlpha = 1;
 }
 
 function renderPartialSymbols(
@@ -321,9 +306,8 @@ function renderPartialSymbols(
       monoColor: partial.monoColor,
       palette,
       symbolSetId: partial.symbolSetId,
-      opacity: 100,
+      opacity: partial.opacity,
       size: partial.size,
-      glow: partial.glow,
     },
     drawArea,
     mask,

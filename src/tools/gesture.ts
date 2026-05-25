@@ -1,14 +1,14 @@
-// === Trace — Gesture Handler (Sticker select/move/resize/rotate + Photo pan/zoom) ===
+// === Trace — Gesture Handler (Sticker/Overlay select/move/resize/rotate + Photo pan/zoom) ===
 // Sticker x/y are normalized to CANVAS (0-1).
 
 import { state, updateState, notify } from '../state';
-import type { StickerInstance, DrawArea } from '../types';
+import type { StickerInstance, OverlayInstance, DrawArea } from '../types';
 import { distance } from '../core/math';
 import { getStickerDimensions } from '../core/stickers';
 import { stickerToCanvas, canvasToSticker } from '../modes/stamp';
-import { getStickerDisplayScale } from '../render/compositor';
+import { getStickerDisplayScale, getOverlayDimensions } from '../render/compositor';
 
-type Action = 'none' | 'sticker-move' | 'sticker-resize' | 'sticker-rotate' | 'photo-pan';
+type Action = 'none' | 'sticker-move' | 'sticker-resize' | 'sticker-rotate' | 'overlay-move' | 'overlay-resize' | 'overlay-rotate' | 'photo-pan';
 
 const g = {
   action: 'none' as Action,
@@ -39,7 +39,6 @@ function tryVibrate() {
 }
 
 function isBrushOrEraser(): boolean {
-  if (state.effectMode === 'partial' && state.partial.target === 'brush' && state.brushActive) return true;
   if (state.eraserActive) return true;
   return false;
 }
@@ -139,6 +138,49 @@ function hitEditButton(cx: number, cy: number, cw: number, ch: number): boolean 
   return Math.abs(lx - btnCX) < 24 && Math.abs(ly - btnCY) < 16;
 }
 
+// --- Overlay hit detection ---
+function toLocalOverlay(cx: number, cy: number, o: OverlayInstance, cw: number, ch: number) {
+  const px = o.x * cw, py = o.y * ch;
+  const a = (-o.rotation * Math.PI) / 180;
+  const dx = cx - px, dy = cy - py;
+  return { lx: dx * Math.cos(a) - dy * Math.sin(a), ly: dx * Math.sin(a) + dy * Math.cos(a) };
+}
+
+function hitOverlay(cx: number, cy: number, cw: number, ch: number): OverlayInstance | null {
+  for (let i = state.overlayImages.length - 1; i >= 0; i--) {
+    const o = state.overlayImages[i];
+    const { w, h } = getOverlayDimensions(o, cw, ch);
+    const { lx, ly } = toLocalOverlay(cx, cy, o, cw, ch);
+    if (Math.abs(lx) <= w / 2 + 8 && Math.abs(ly) <= h / 2 + 8) return o;
+  }
+  return null;
+}
+
+function hitOverlayDelete(cx: number, cy: number, cw: number, ch: number): boolean {
+  const o = state.overlayImages.find(o => o.id === state.selectedOverlayId);
+  if (!o) return false;
+  const { w, h } = getOverlayDimensions(o, cw, ch);
+  const { lx, ly } = toLocalOverlay(cx, cy, o, cw, ch);
+  const dx = lx - (-w / 2), dy = ly - (-h / 2);
+  return dx * dx + dy * dy <= DELETE_R * DELETE_R;
+}
+
+function hitOverlayRotate(cx: number, cy: number, cw: number, ch: number): boolean {
+  const o = state.overlayImages.find(o => o.id === state.selectedOverlayId);
+  if (!o) return false;
+  const { w, h } = getOverlayDimensions(o, cw, ch);
+  const { lx, ly } = toLocalOverlay(cx, cy, o, cw, ch);
+  return Math.abs(lx - w / 2) < HANDLE_R && Math.abs(ly - h / 2) < HANDLE_R;
+}
+
+function hitOverlayResize(cx: number, cy: number, cw: number, ch: number): boolean {
+  const o = state.overlayImages.find(o => o.id === state.selectedOverlayId);
+  if (!o) return false;
+  const { w, h } = getOverlayDimensions(o, cw, ch);
+  const { lx, ly } = toLocalOverlay(cx, cy, o, cw, ch);
+  return Math.abs(lx - w / 2) < HANDLE_R && Math.abs(ly - (-h / 2)) < HANDLE_R;
+}
+
 export function setupGestureHandlers(
   canvas: HTMLCanvasElement,
   _getDrawArea: () => DrawArea,
@@ -157,6 +199,7 @@ export function setupGestureHandlers(
         updateState({
           stickers: state.stickers.filter(s => s.id !== state.selectedStickerId),
           selectedStickerId: null,
+          stickerEditOnly: false,
         });
         return;
       }
@@ -213,7 +256,7 @@ export function setupGestureHandlers(
         return;
       }
 
-      // Sticker body → select + move (do NOT auto-open panel)
+      // Sticker body → select + move + enter edit mode
       const hit = hitSticker(p.x, p.y, cw, ch);
       if (hit) {
         const norm = canvasToSticker(p.x, p.y, cw, ch);
@@ -224,14 +267,76 @@ export function setupGestureHandlers(
         g.startNY = norm.ny;
         g.startObjNX = hit.x;
         g.startObjNY = hit.y;
-        updateState({ selectedStickerId: hit.id });
+        updateState({ selectedStickerId: hit.id, activeTool: 'sticker', stickerEditOnly: true });
         canvas.setPointerCapture(e.pointerId);
         return;
       }
 
-      // Empty area → deselect
+      // Empty area → deselect (and exit edit mode if active)
       if (state.selectedStickerId) {
-        updateState({ selectedStickerId: null });
+        updateState({ selectedStickerId: null, stickerEditOnly: false });
+        return;
+      }
+    }
+
+    // Overlay interactions
+    if (state.overlayImages.length > 0) {
+      // Delete overlay
+      if (state.selectedOverlayId && hitOverlayDelete(p.x, p.y, cw, ch)) {
+        updateState({
+          overlayImages: state.overlayImages.filter(o => o.id !== state.selectedOverlayId),
+          selectedOverlayId: null,
+        });
+        return;
+      }
+
+      // Rotate overlay (bottom-right)
+      if (state.selectedOverlayId && hitOverlayRotate(p.x, p.y, cw, ch)) {
+        const o = state.overlayImages.find(o => o.id === state.selectedOverlayId)!;
+        const px = o.x * cw, py = o.y * ch;
+        g.action = 'overlay-rotate';
+        g.pointerId = e.pointerId;
+        g.stickerId = o.id;
+        g.centerDist = Math.max(1, Math.hypot(p.x - px, p.y - py));
+        g.centerAngle = Math.atan2(p.y - py, p.x - px);
+        g.startScale = o.scale;
+        g.startRotation = o.rotation;
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+
+      // Resize overlay (top-right)
+      if (state.selectedOverlayId && hitOverlayResize(p.x, p.y, cw, ch)) {
+        const o = state.overlayImages.find(o => o.id === state.selectedOverlayId)!;
+        const px = o.x * cw, py = o.y * ch;
+        g.action = 'overlay-resize';
+        g.pointerId = e.pointerId;
+        g.stickerId = o.id;
+        g.centerDist = Math.max(1, Math.hypot(p.x - px, p.y - py));
+        g.startScale = o.scale;
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+
+      // Hit overlay body → select + move
+      const hitOv = hitOverlay(p.x, p.y, cw, ch);
+      if (hitOv) {
+        const norm = canvasToSticker(p.x, p.y, cw, ch);
+        g.action = 'overlay-move';
+        g.pointerId = e.pointerId;
+        g.stickerId = hitOv.id;
+        g.startNX = norm.nx;
+        g.startNY = norm.ny;
+        g.startObjNX = hitOv.x;
+        g.startObjNY = hitOv.y;
+        updateState({ selectedOverlayId: hitOv.id, selectedStickerId: null });
+        canvas.setPointerCapture(e.pointerId);
+        return;
+      }
+
+      // Empty area → deselect overlay
+      if (state.selectedOverlayId) {
+        updateState({ selectedOverlayId: null });
         return;
       }
     }
@@ -291,9 +396,7 @@ export function setupGestureHandlers(
       const s = state.stickers.find(s => s.id === g.stickerId);
       if (s) {
         const { px, py } = stickerToCanvas(s, cw, ch);
-        const dist = Math.max(1, Math.hypot(p.x - px, p.y - py));
         const angle = Math.atan2(p.y - py, p.x - px);
-        s.scale = Math.min(8, Math.max(0.08, g.startScale * (dist / g.centerDist)));
         s.rotation = g.startRotation + ((angle - g.centerAngle) * 180) / Math.PI;
         notify();
       }
@@ -305,6 +408,37 @@ export function setupGestureHandlers(
         photoX: Math.max(0, Math.min(1, g.startPhotoX + (e.clientX / r.width - g.startClientNX))),
         photoY: Math.max(0, Math.min(1, g.startPhotoY + (e.clientY / r.height - g.startClientNY))),
       });
+    }
+
+    // Overlay move/resize/rotate
+    if (g.action === 'overlay-move') {
+      const o = state.overlayImages.find(o => o.id === g.stickerId);
+      if (o) {
+        const norm = canvasToSticker(p.x, p.y, cw, ch);
+        o.x = g.startObjNX + (norm.nx - g.startNX);
+        o.y = g.startObjNY + (norm.ny - g.startNY);
+        notify();
+      }
+    }
+
+    if (g.action === 'overlay-resize') {
+      const o = state.overlayImages.find(o => o.id === g.stickerId);
+      if (o) {
+        const px = o.x * cw, py = o.y * ch;
+        const dist = Math.max(1, Math.hypot(p.x - px, p.y - py));
+        o.scale = Math.min(8, Math.max(0.1, g.startScale * (dist / g.centerDist)));
+        notify();
+      }
+    }
+
+    if (g.action === 'overlay-rotate') {
+      const o = state.overlayImages.find(o => o.id === g.stickerId);
+      if (o) {
+        const px = o.x * cw, py = o.y * ch;
+        const angle = Math.atan2(p.y - py, p.x - px);
+        o.rotation = g.startRotation + ((angle - g.centerAngle) * 180) / Math.PI;
+        notify();
+      }
     }
   });
 
@@ -323,19 +457,22 @@ export function setupGestureHandlers(
     }
   });
 
-  // Scroll wheel → scale sticker or photo
+  // Scroll wheel → scale sticker/overlay or photo
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const factor = e.deltaY > 0 ? 0.92 : 1.08;
     if (state.selectedStickerId) {
       const s = state.stickers.find(s => s.id === state.selectedStickerId);
       if (s) { s.scale = Math.min(8, Math.max(0.08, s.scale * factor)); notify(); }
+    } else if (state.selectedOverlayId) {
+      const o = state.overlayImages.find(o => o.id === state.selectedOverlayId);
+      if (o) { o.scale = Math.min(8, Math.max(0.1, o.scale * factor)); notify(); }
     } else if (state.canvasRatio !== 'original') {
       updateState({ photoScale: Math.max(0.2, Math.min(5, state.photoScale * factor)) });
     }
   }, { passive: false });
 
-  // Touch pinch
+  // Touch pinch — scale only (no rotation)
   canvas.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
       e.preventDefault();
@@ -344,8 +481,11 @@ export function setupGestureHandlers(
         const s = state.stickers.find(s => s.id === state.selectedStickerId);
         if (s) {
           g.pinchStickerScale = s.scale;
-          g.pinchStickerAngle = Math.atan2(e.touches[1].clientY - e.touches[0].clientY, e.touches[1].clientX - e.touches[0].clientX);
-          g.pinchStickerRotation = s.rotation;
+        }
+      } else if (state.selectedOverlayId) {
+        const o = state.overlayImages.find(o => o.id === state.selectedOverlayId);
+        if (o) {
+          g.pinchStickerScale = o.scale;
         }
       } else if (!isBrushOrEraser()) {
         g.pinchPhotoScale = state.photoScale;
@@ -360,9 +500,13 @@ export function setupGestureHandlers(
       if (state.selectedStickerId) {
         const s = state.stickers.find(s => s.id === state.selectedStickerId);
         if (s) {
-          const a = Math.atan2(e.touches[1].clientY - e.touches[0].clientY, e.touches[1].clientX - e.touches[0].clientX);
           s.scale = Math.min(8, Math.max(0.08, g.pinchStickerScale * (d / g.pinchDist)));
-          s.rotation = g.pinchStickerRotation + ((a - g.pinchStickerAngle) * 180) / Math.PI;
+          notify();
+        }
+      } else if (state.selectedOverlayId) {
+        const o = state.overlayImages.find(o => o.id === state.selectedOverlayId);
+        if (o) {
+          o.scale = Math.min(8, Math.max(0.1, g.pinchStickerScale * (d / g.pinchDist)));
           notify();
         }
       } else if (!isBrushOrEraser()) {

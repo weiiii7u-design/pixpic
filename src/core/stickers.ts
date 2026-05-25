@@ -460,7 +460,7 @@ export function createEffectCanvas(
         const value = cellCoverage(x, y, step);
         if (value > 0.12) {
           const fontSize = Math.round(unitSize * 1.55);
-          out.font = `800 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+          out.font = `800 ${fontSize}px "JetBrains Mono", monospace`;
           out.globalAlpha = 1;
           out.fillText(
             chars[Math.min(chars.length - 1, Math.floor((1 - value) * chars.length))],

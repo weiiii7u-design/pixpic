@@ -1,6 +1,9 @@
-// === Trace — UI Controls (Sliders, Toggles, Buttons) ===
+// === Trace — UI Controls (Custom touch-drag sliders for mobile) ===
 
 import { el } from './dom';
+
+/** Global flag: when true, panel should NOT re-render (slider is being dragged) */
+export let sliderDragging = false;
 
 export function createSlider(
   label: string,
@@ -18,23 +21,70 @@ export function createSlider(
   header.appendChild(labelEl);
   header.appendChild(valueEl);
 
-  const input = el('input', {
-    type: 'range',
-    min: String(min),
-    max: String(max),
-    value: String(value),
-    step: String(step),
-    className: 'slider',
+  // Custom drag slider
+  const track = el('div', { className: 'slider-track' });
+  const fill = el('div', { className: 'slider-fill' });
+  const thumb = el('div', { className: 'slider-thumb' });
+  track.appendChild(fill);
+  track.appendChild(thumb);
+
+  // Set initial position
+  const ratio = (value - min) / (max - min);
+  fill.style.width = `${ratio * 100}%`;
+  thumb.style.left = `${ratio * 100}%`;
+
+  // Drag logic
+  let isDragging = false;
+
+  function updateFromX(clientX: number): void {
+    const rect = track.getBoundingClientRect();
+    let pct = (clientX - rect.left) / rect.width;
+    pct = Math.max(0, Math.min(1, pct));
+
+    // Snap to step
+    let val = min + pct * (max - min);
+    val = Math.round(val / step) * step;
+    val = Math.max(min, Math.min(max, val));
+
+    const newRatio = (val - min) / (max - min);
+    fill.style.width = `${newRatio * 100}%`;
+    thumb.style.left = `${newRatio * 100}%`;
+    valueEl.textContent = formatValue(val, step);
+    onChange(val);
+  }
+
+  // Pointer events (works for both touch and mouse)
+  track.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    isDragging = true;
+    sliderDragging = true;
+    track.setPointerCapture(e.pointerId);
+    updateFromX(e.clientX);
+    thumb.classList.add('active');
   });
 
-  input.addEventListener('input', () => {
-    const v = parseFloat(input.value);
-    valueEl.textContent = formatValue(v, step);
-    onChange(v);
+  track.addEventListener('pointermove', (e) => {
+    if (!isDragging) return;
+    e.preventDefault();
+    updateFromX(e.clientX);
+  });
+
+  track.addEventListener('pointerup', (e) => {
+    isDragging = false;
+    sliderDragging = false;
+    track.releasePointerCapture(e.pointerId);
+    thumb.classList.remove('active');
+  });
+
+  track.addEventListener('pointercancel', (e) => {
+    isDragging = false;
+    sliderDragging = false;
+    track.releasePointerCapture(e.pointerId);
+    thumb.classList.remove('active');
   });
 
   wrapper.appendChild(header);
-  wrapper.appendChild(input);
+  wrapper.appendChild(track);
   return wrapper;
 }
 

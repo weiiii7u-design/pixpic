@@ -1,6 +1,6 @@
-// === Trace — Global Reactive State (v4: Layer Architecture) ===
+// === PixPic — Global Reactive State ===
 
-import type { AppState, PartialConfig, FullConfig, CanvasRatio } from './types';
+import type { AppState, PartialConfig, CanvasRatio, OverlayInstance } from './types';
 
 type Listener = () => void;
 
@@ -10,36 +10,25 @@ export const state: AppState = {
   screen: 'welcome',
   activeTool: 'none',
   effectMode: 'off',
+  adjustSubTab: 'dots',
 
   sourceImage: null,
   imageFileName: '',
 
   partial: {
-    target: 'auto',
     effect: 'symbols',
     colorMode: 'mono',
     monoColor: '#00ff41',
-    palette: 'dream',
+    palette: 'photo',
     density: 30,
     size: 100,
-    glow: 10,
+    glow: 0,
+    opacity: 100,
     charset: 'standard',
     symbolSetId: 'tech',
     invert: false,
-  },
-
-  full: {
-    colorMode: 'mono',
-    monoColor: '#1a1a1a',
-    background: 'solid',
-    bgColor: '#c1ff72',
-    bgGradient: ['#ff6baa', '#2B2BD4'],
-    bgGradientDirection: 180,
-    density: 30,
-    brightness: 20,
-    contrast: 30,
-    charset: 'dots',
-    glow: 0,
+    segEnabled: true,
+    bgImageEnabled: true,
   },
 
   stickers: [],
@@ -51,16 +40,17 @@ export const state: AppState = {
   customColors: [],
   stickerLibraryTab: '边框',
   stickerEditOnly: false,
+  stickerEditTab: 'dots',
   alignGuides: { h: false, v: false },
-  subjectAvoid: false,
+
+  overlayImages: [] as OverlayInstance[],
+  selectedOverlayId: null,
+  overlayEditTab: 'shape',
 
   subjectMask: null,
-  brushMask: null,
   eraserMask: null,
 
   eraserActive: false,
-  brushActive: true,
-  brushSize: 30,
   eraserSize: 30,
   adjustParam: 'density',
   subjectLoading: false,
@@ -95,10 +85,5 @@ export function updateState(partial: Partial<AppState>): void {
 
 export function updatePartial(changes: Partial<PartialConfig>): void {
   Object.assign(state.partial, changes);
-  notify();
-}
-
-export function updateFull(changes: Partial<FullConfig>): void {
-  Object.assign(state.full, changes);
   notify();
 }

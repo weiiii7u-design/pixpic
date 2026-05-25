@@ -138,26 +138,28 @@ function drawStickerControls(
   ctx.lineTo(delX - crossSize, delY + crossSize);
   ctx.stroke();
 
-  // Edit button — top-right corner (pill with "编辑" text)
-  const editX = width / 2;
-  const editY = -height / 2;
-  const pillW = 36;
-  const pillH = 20;
-  const pillR = pillH / 2;
+  // Edit button — top-right corner (only show when NOT already in edit mode)
+  if (!state.stickerEditOnly) {
+    const editX = width / 2;
+    const editY = -height / 2;
+    const pillW = 36;
+    const pillH = 20;
+    const pillR = pillH / 2;
 
-  ctx.beginPath();
-  ctx.roundRect(editX - pillW / 2, editY - pillH / 2, pillW, pillH, pillR);
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fill();
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
+    ctx.beginPath();
+    ctx.roundRect(editX - pillW / 2, editY - pillH / 2, pillW, pillH, pillR);
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
 
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '600 10px "Plus Jakarta Sans", -apple-system, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('编辑', editX, editY);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '600 10px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('编辑', editX, editY);
+  }
 
   // Subject avoid button — bottom-left corner (circle, blue when active)
   const avoidX = -width / 2;

@@ -1,15 +1,12 @@
-// === Trace — Type Definitions (v4: Layer Architecture) ===
+// === PixPic — Type Definitions ===
 
 // --- Editor ---
 export type EditorTool = 'none' | 'adjust' | 'sticker' | 'canvas';
-export type EffectMode = 'off' | 'partial' | 'full';
+export type EffectMode = 'off' | 'partial';
+export type AdjustSubTab = 'dots' | 'palette' | 'otherParams';
 
 // --- Partial Effect ---
-export type PartialTarget = 'auto' | 'brush';
 export type EffectType = 'ascii' | 'symbols';
-
-// --- Full Effect ---
-export type BackgroundMode = 'solid' | 'gradient' | 'transparent';
 
 // --- Shared ---
 export type ColorMode = 'original' | 'mono' | 'multi';
@@ -25,7 +22,6 @@ export interface SymbolSet {
 
 // --- Partial Config ---
 export interface PartialConfig {
-  target: PartialTarget;
   effect: EffectType;
   colorMode: ColorMode;
   monoColor: string;
@@ -33,24 +29,12 @@ export interface PartialConfig {
   density: number;
   size: number;
   glow: number;
+  opacity: number;
   charset: CharsetName;
   symbolSetId: string;
   invert: boolean;
-}
-
-// --- Full Config ---
-export interface FullConfig {
-  colorMode: ColorMode;
-  monoColor: string;
-  background: BackgroundMode;
-  bgColor: string;
-  bgGradient: [string, string];
-  bgGradientDirection: number;
-  density: number;
-  brightness: number;
-  contrast: number;
-  charset: CharsetName;
-  glow: number;
+  segEnabled: boolean;
+  bgImageEnabled: boolean;
 }
 
 // --- Sticker ---
@@ -70,6 +54,20 @@ export interface StickerInstance {
   subjectAvoid: boolean;
 }
 
+// --- Overlay Image ---
+export type OverlayShape = 'circle' | 'square' | 'roundedSquare' | 'heart' | 'star' | 'hexagon' | 'diamond' | 'rectangle';
+
+export interface OverlayInstance {
+  id: string;
+  image: HTMLImageElement;
+  x: number;       // normalized 0-1 (canvas coords)
+  y: number;
+  scale: number;
+  rotation: number;
+  shape: OverlayShape;
+  opacity: number; // 0-1
+}
+
 // --- Draw Area ---
 export interface DrawArea {
   x: number;
@@ -81,39 +79,41 @@ export interface DrawArea {
 // --- App State ---
 export interface AppState {
   screen: 'welcome' | 'editor';
-  activeTool: EditorTool;       // which tool panel is open
-  effectMode: EffectMode;       // bottom layer effect (off / partial / full)
+  activeTool: EditorTool;
+  effectMode: EffectMode;
+  adjustSubTab: AdjustSubTab;
 
   sourceImage: HTMLImageElement | null;
   imageFileName: string;
 
   partial: PartialConfig;
-  full: FullConfig;
 
-  // Stickers (always present, layered on top of effects)
+  // Stickers
   stickers: StickerInstance[];
   selectedStickerId: string | null;
   stampOpacity: number;
   stickerMode: StickerMode;
   stickerPalette: string;
-  stickerColor: string;           // current selected color for stickers
-  customColors: string[];         // user-saved custom colors
+  stickerColor: string;
+  customColors: string[];
   stickerLibraryTab: string;
-  stickerEditOnly: boolean;       // true = show only adjust controls (no library)
+  stickerEditOnly: boolean;
+  stickerEditTab: string;
   alignGuides: { h: boolean; v: boolean };
-  subjectAvoid: boolean;
+
+  // Overlay Images
+  overlayImages: OverlayInstance[];
+  selectedOverlayId: string | null;
+  overlayEditTab: string;
 
   // Masks
   subjectMask: boolean[] | null;
-  brushMask: boolean[] | null;
   eraserMask: boolean[] | null;
 
   // Tools
   eraserActive: boolean;
-  brushActive: boolean;
-  brushSize: number;
   eraserSize: number;
-  adjustParam: string;           // currently selected adjust parameter icon
+  adjustParam: string;
   subjectLoading: boolean;
   subjectError: string | null;
 

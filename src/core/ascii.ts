@@ -15,7 +15,6 @@ export interface AsciiConfig {
   gamma: number;         // 0.1 to 3.0
   charset: CharsetName;
   colorMode: AsciiColorMode;
-  glow: number;          // 0-40 (shadowBlur)
   invert: boolean;
 }
 
@@ -62,7 +61,7 @@ export function renderAsciiRegion(
   config: AsciiConfig,
   drawArea: DrawArea
 ): void {
-  const { density, size, brightness, contrast, threshold, gamma, charset, colorMode, glow, invert } = config;
+  const { density, size, brightness, contrast, threshold, gamma, charset, colorMode, invert } = config;
   const sizeScale = (size || 100) / 100;
   const chars = getCharset(charset);
 
@@ -80,16 +79,8 @@ export function renderAsciiRegion(
   const imageData = sCtx.getImageData(0, 0, cols, rows);
   const pixels = imageData.data;
 
-  // Setup glow — always white for visibility
-  if (glow > 0) {
-    ctx.shadowBlur = glow;
-    ctx.shadowColor = '#ffffff';
-  } else {
-    ctx.shadowBlur = 0;
-  }
-
   const fontSize = Math.max(cellW * 1.2 * sizeScale, 4);
-  ctx.font = `${fontSize}px "IBM Plex Mono", monospace`;
+  ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
@@ -140,8 +131,6 @@ export function renderAsciiRegion(
     }
   }
 
-  // Reset shadow
-  ctx.shadowBlur = 0;
 }
 
 /** Get grid dimensions for a given config and area */

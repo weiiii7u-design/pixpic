@@ -1,12 +1,13 @@
-// === Trace — Main Entry Point (v4: Layer Architecture) ===
+// === PixPic — Main Entry Point (v4: Layer Architecture) ===
 
 import './style.css';
 import { state, subscribe } from './state';
 import { createWelcomeScreen } from './ui/welcome';
 import { createNavbar } from './ui/navbar';
 import { createPanel, renderPanelContent } from './ui/panel';
-import { initCompositor, startRenderLoop, exportCanvas } from './render/compositor';
+import { initCompositor, startRenderLoop, stopRenderLoop, exportCanvas } from './render/compositor';
 import { initStickers } from './core/stickers';
+import { sliderDragging } from './ui/controls';
 import { el } from './ui/dom';
 
 const app = document.getElementById('app')!;
@@ -18,6 +19,7 @@ function mountApp(): void {
   app.innerHTML = '';
 
   if (state.screen === 'welcome') {
+    stopRenderLoop();
     app.appendChild(createWelcomeScreen());
     editorMounted = false;
   } else if (state.screen === 'editor') {
@@ -67,6 +69,8 @@ subscribe(() => {
   } else if (state.screen === 'welcome') {
     mountApp();
   } else {
+    // Skip panel rebuild while slider is being dragged (prevents DOM destruction mid-drag)
+    if (sliderDragging) return;
     // Update existing editor
     if (panelWrapperEl) renderPanelContent(panelWrapperEl);
   }

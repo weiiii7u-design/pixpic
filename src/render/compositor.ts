@@ -1,13 +1,11 @@
-// === Trace — Main Render Compositor (v4: Canvas Ratio + Photo Transform) ===
+// === PixPic — Main Render Compositor (v4: Canvas Ratio + Photo Transform) ===
 
 import { state, updateState } from '../state';
 import { renderPartialMode } from '../modes/partial';
-import { renderFullMode } from '../modes/full';
 import { renderStampMode } from '../modes/stamp';
 import { applyEraser } from '../tools/eraser';
-import { applyBrush } from '../tools/brush';
 import { setupGestureHandlers } from '../tools/gesture';
-import type { DrawArea, CanvasRatio } from '../types';
+import type { DrawArea, CanvasRatio, OverlayShape, OverlayInstance } from '../types';
 
 let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
@@ -17,6 +15,10 @@ let currentCanvasW = 0;
 let currentCanvasH = 0;
 /** Canvas size when no panel is open — the "full" reference size for sticker dimensions */
 let referenceCanvasW = 0;
+/** Cached offscreen canvas for subject-avoidance rendering */
+let offscreenCache: HTMLCanvasElement | null = null;
+let offscreenCacheW = 0;
+let offscreenCacheH = 0;
 
 const RATIO_MAP: Record<CanvasRatio, number | null> = {
   'original': null,
@@ -122,25 +124,7 @@ function calcPhotoRect(canvasW: number, canvasH: number): DrawArea {
 }
 
 function drawCanvasBackground(ctx: CanvasRenderingContext2D, w: number, h: number): void {
-  if (state.effectMode === 'full') {
-    // Full mode: use its background setting
-    const { full } = state;
-    if (full.background === 'gradient') {
-      const rad = (full.bgGradientDirection * Math.PI) / 180;
-      const x1 = w / 2 - Math.cos(rad) * w / 2;
-      const y1 = h / 2 - Math.sin(rad) * h / 2;
-      const x2 = w / 2 + Math.cos(rad) * w / 2;
-      const y2 = h / 2 + Math.sin(rad) * h / 2;
-      const grad = ctx.createLinearGradient(x1, y1, x2, y2);
-      grad.addColorStop(0, full.bgGradient[0]);
-      grad.addColorStop(1, full.bgGradient[1]);
-      ctx.fillStyle = grad;
-    } else if (full.background === 'solid') {
-      ctx.fillStyle = full.bgColor;
-    } else {
-      ctx.fillStyle = '#ffffff';
-    }
-  } else if (state.canvasBgColor && state.canvasRatio !== 'original') {
+  if (state.canvasBgColor && state.canvasRatio !== 'original') {
     // User-selected canvas background color
     ctx.fillStyle = state.canvasBgColor;
   } else {
@@ -155,20 +139,28 @@ export function render(): void {
   const container = canvas.parentElement;
   if (!container) return;
 
-  const rect = container.getBoundingClientRect();
+  // Use content box dimensions (subtract padding) to avoid CSS max-width distortion
+  const style = getComputedStyle(container);
+  const padL = parseFloat(style.paddingLeft) || 0;
+  const padR = parseFloat(style.paddingRight) || 0;
+  const padT = parseFloat(style.paddingTop) || 0;
+  const padB = parseFloat(style.paddingBottom) || 0;
+  const availW = container.clientWidth - padL - padR;
+  const availH = container.clientHeight - padT - padB;
+  if (availW <= 0 || availH <= 0) return; // Not laid out yet
   const dpr = window.devicePixelRatio || 1;
 
   // Calculate canvas dimensions based on ratio
   const canvasAspect = getCanvasAspect();
-  const containerAspect = rect.width / rect.height;
+  const containerAspect = availW / availH;
 
   let canvasW: number, canvasH: number;
   if (canvasAspect > containerAspect) {
-    canvasW = rect.width;
-    canvasH = rect.width / canvasAspect;
+    canvasW = availW;
+    canvasH = availW / canvasAspect;
   } else {
-    canvasH = rect.height;
-    canvasW = rect.height * canvasAspect;
+    canvasH = availH;
+    canvasW = availH * canvasAspect;
   }
 
   canvas.style.width = `${canvasW}px`;
@@ -207,8 +199,6 @@ export function render(): void {
 
   if (state.effectMode === 'partial') {
     renderPartialMode(ctx, img, photoRect);
-  } else if (state.effectMode === 'full') {
-    renderFullMode(ctx, img, photoRect);
   } else {
     // No effect — just draw photo
     ctx.drawImage(img, photoRect.x, photoRect.y, photoRect.w, photoRect.h);
@@ -216,15 +206,24 @@ export function render(): void {
 
   ctx.restore();
 
-  // Layer 2: Stickers (always rendered, on full canvas)
+  // Layer 2: Overlay images (above photo, below stickers)
+  if (state.overlayImages.length > 0 || state.selectedOverlayId) {
+    renderOverlays(ctx, canvasW, canvasH, 1);
+  }
+
+  // Layer 3: Stickers (always rendered, on full canvas)
   if (state.stickers.length > 0 || state.selectedStickerId) {
     const hasAnyAvoid = state.stickers.some(s => s.subjectAvoid) && state.subjectMask;
     if (hasAnyAvoid) {
-      // Render stickers with subject avoidance on individual stickers
-      const offscreen = document.createElement('canvas');
-      offscreen.width = canvas.width;
-      offscreen.height = canvas.height;
-      const offCtx = offscreen.getContext('2d')!;
+      // Reuse cached offscreen canvas (avoid creating one every frame)
+      if (!offscreenCache || offscreenCacheW !== canvas.width || offscreenCacheH !== canvas.height) {
+        offscreenCache = document.createElement('canvas');
+        offscreenCacheW = canvas.width;
+        offscreenCacheH = canvas.height;
+      }
+      offscreenCache.width = canvas.width;
+      offscreenCache.height = canvas.height;
+      const offCtx = offscreenCache.getContext('2d')!;
       offCtx.scale(dpr, dpr);
       renderStampMode(offCtx, img, photoRect, 1);
       // Only erase subject for stickers that have subjectAvoid enabled
@@ -248,7 +247,7 @@ export function render(): void {
         state.stickers = avoid;
         renderStampMode(offCtx, img, photoRect, 1);
         eraseSubjectFromCanvas(offCtx, img, photoRect, canvasW, canvasH);
-        ctx.drawImage(offscreen, 0, 0, canvasW, canvasH);
+        ctx.drawImage(offscreenCache!, 0, 0, canvasW, canvasH);
       }
 
       state.stickers = savedStickers;
@@ -273,14 +272,18 @@ export function stopRenderLoop(): void {
 export function exportCanvas(): void {
   if (!canvas || !state.sourceImage) return;
 
-  // Temporarily deselect sticker so selection UI doesn't appear in export
+  // Temporarily deselect sticker/overlay so selection UI doesn't appear in export
   const savedSelectedId = state.selectedStickerId;
+  const savedOverlayId = state.selectedOverlayId;
   state.selectedStickerId = null;
+  state.selectedOverlayId = null;
 
   const img = state.sourceImage;
   const canvasAspect = getCanvasAspect();
 
-  // Export at high resolution
+  // Export at high resolution (capped to avoid browser canvas limits)
+  // iOS Safari: ~16MP max, most browsers: ~32MP
+  const MAX_PIXELS = 16_000_000;
   const maxDim = Math.max(img.naturalWidth, img.naturalHeight);
   let exportW: number, exportH: number;
   if (canvasAspect >= 1) {
@@ -289,6 +292,14 @@ export function exportCanvas(): void {
   } else {
     exportH = maxDim;
     exportW = Math.round(maxDim * canvasAspect);
+  }
+
+  // Scale down if exceeding pixel limit
+  const totalPixels = exportW * exportH;
+  if (totalPixels > MAX_PIXELS) {
+    const scale = Math.sqrt(MAX_PIXELS / totalPixels);
+    exportW = Math.round(exportW * scale);
+    exportH = Math.round(exportH * scale);
   }
 
   const exportEl = document.createElement('canvas');
@@ -310,18 +321,23 @@ export function exportCanvas(): void {
 
   if (state.effectMode === 'partial') {
     renderPartialMode(exportCtx, img, photoRect);
-  } else if (state.effectMode === 'full') {
-    renderFullMode(exportCtx, img, photoRect);
   } else {
     exportCtx.drawImage(img, photoRect.x, photoRect.y, photoRect.w, photoRect.h);
   }
 
   exportCtx.restore();
 
-  // Layer 2: Stickers (always rendered)
+  // Layer 2: Overlay images
+  if (state.overlayImages.length > 0) {
+    renderOverlays(exportCtx, exportW, exportH, exportW / (referenceCanvasW > 0 ? referenceCanvasW : currentCanvasW));
+  }
+
+  // Layer 3: Stickers (always rendered)
   if (state.stickers.length > 0) {
     const hasAnyAvoid = state.stickers.some(s => s.subjectAvoid) && state.subjectMask;
-    const stickerScale = exportW / currentCanvasW;
+    // Use referenceCanvasW (full panel-closed size) for correct proportional scaling
+    const refW = referenceCanvasW > 0 ? referenceCanvasW : currentCanvasW;
+    const stickerScale = exportW / refW;
 
     if (hasAnyAvoid) {
       const savedStickers = state.stickers;
@@ -360,19 +376,33 @@ export function exportCanvas(): void {
 
   // Restore selection
   state.selectedStickerId = savedSelectedId;
+  state.selectedOverlayId = savedOverlayId;
 
   // Save
+  const fileName = `pixpic-${state.imageFileName || 'photo'}.png`;
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
   if (isMobile) {
-    exportEl.toBlob((blob) => {
+    exportEl.toBlob(async (blob) => {
       if (!blob) return;
+      // Try Web Share API first (works reliably on iOS Safari)
+      if (navigator.share && navigator.canShare?.({ files: [new File([], '')] })) {
+        const file = new File([blob], fileName, { type: 'image/png' });
+        try {
+          await navigator.share({ files: [file] });
+          return;
+        } catch { /* User cancelled or not supported, fall through */ }
+      }
+      // Fallback: create download link
       const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.click();
       setTimeout(() => URL.revokeObjectURL(url), 60000);
     }, 'image/png');
   } else {
     const link = document.createElement('a');
-    link.download = `trace-${state.imageFileName || 'photo'}.png`;
+    link.download = fileName;
     link.href = exportEl.toDataURL('image/png');
     link.click();
   }
@@ -417,6 +447,196 @@ function eraseSubjectFromCanvas(
   ctx.restore();
 }
 
+/** Render overlay images with shape clipping */
+function renderOverlays(
+  ctx: CanvasRenderingContext2D,
+  canvasW: number,
+  canvasH: number,
+  sizeScale: number
+): void {
+  const displayScale = sizeScale === 1 ? getStickerDisplayScale() : 1;
+
+  for (const overlay of state.overlayImages) {
+    const imgW = overlay.image.naturalWidth;
+    const imgH = overlay.image.naturalHeight;
+    if (imgW === 0 || imgH === 0) continue;
+
+    // Default size: ~40% of canvas width, maintaining aspect ratio
+    const baseW = canvasW * 0.4 * overlay.scale * displayScale * sizeScale;
+    const baseH = baseW * (imgH / imgW);
+
+    const px = overlay.x * canvasW;
+    const py = overlay.y * canvasH;
+
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate((overlay.rotation * Math.PI) / 180);
+    ctx.globalAlpha = overlay.opacity ?? 1;
+
+    // Apply shape clip
+    applyShapeClip(ctx, overlay.shape, baseW, baseH);
+    ctx.drawImage(overlay.image, -baseW / 2, -baseH / 2, baseW, baseH);
+    ctx.restore();
+
+    // Draw selection controls
+    if (sizeScale === 1 && overlay.id === state.selectedOverlayId) {
+      drawOverlayControls(ctx, overlay, canvasW, canvasH, baseW, baseH);
+    }
+  }
+}
+
+/** Get overlay dimensions for hit testing */
+export function getOverlayDimensions(overlay: OverlayInstance, canvasW: number, _canvasH: number): { w: number; h: number } {
+  const imgW = overlay.image.naturalWidth;
+  const imgH = overlay.image.naturalHeight;
+  if (imgW === 0) return { w: 0, h: 0 };
+  const displayScale = getStickerDisplayScale();
+  const baseW = canvasW * 0.4 * overlay.scale * displayScale;
+  const baseH = baseW * (imgH / imgW);
+  return { w: baseW, h: baseH };
+}
+
+/** Apply geometric shape as clip path */
+function applyShapeClip(ctx: CanvasRenderingContext2D, shape: OverlayShape, w: number, h: number): void {
+  const r = Math.min(w, h) / 2;
+  ctx.beginPath();
+  switch (shape) {
+    case 'circle':
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      break;
+    case 'square':
+      ctx.rect(-w / 2, -h / 2, w, h);
+      break;
+    case 'roundedSquare':
+      ctx.roundRect(-w / 2, -h / 2, w, h, r * 0.3);
+      break;
+    case 'heart': {
+      const s = r * 0.9;
+      ctx.moveTo(0, s * 0.4);
+      ctx.bezierCurveTo(-s * 0.1, -s * 0.1, -s, -s * 0.4, -s * 0.5, -s * 0.8);
+      ctx.bezierCurveTo(-s * 0.1, -s * 1.1, 0, -s * 0.8, 0, -s * 0.5);
+      ctx.bezierCurveTo(0, -s * 0.8, s * 0.1, -s * 1.1, s * 0.5, -s * 0.8);
+      ctx.bezierCurveTo(s, -s * 0.4, s * 0.1, -s * 0.1, 0, s * 0.4);
+      break;
+    }
+    case 'star': {
+      const outerR = r;
+      const innerR = r * 0.4;
+      for (let i = 0; i < 10; i++) {
+        const angle = (i * Math.PI) / 5 - Math.PI / 2;
+        const radius = i % 2 === 0 ? outerR : innerR;
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      break;
+    }
+    case 'hexagon': {
+      for (let i = 0; i < 6; i++) {
+        const angle = (i * Math.PI) / 3 - Math.PI / 6;
+        const x = Math.cos(angle) * r;
+        const y = Math.sin(angle) * r;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      break;
+    }
+    case 'diamond': {
+      ctx.moveTo(0, -h / 2);
+      ctx.lineTo(w / 2, 0);
+      ctx.lineTo(0, h / 2);
+      ctx.lineTo(-w / 2, 0);
+      ctx.closePath();
+      break;
+    }
+    case 'rectangle': {
+      // 16:9 landscape rectangle
+      const rw = Math.min(w, h) * (16 / 9) * 0.5;
+      const rh = Math.min(w, h) * 0.5;
+      ctx.roundRect(-rw / 2, -rh / 2, rw, rh, 4);
+      break;
+    }
+  }
+  ctx.clip();
+}
+
+/** Draw selection border + controls for selected overlay */
+function drawOverlayControls(
+  ctx: CanvasRenderingContext2D,
+  overlay: OverlayInstance,
+  canvasW: number,
+  canvasH: number,
+  w: number,
+  h: number
+): void {
+  const px = overlay.x * canvasW;
+  const py = overlay.y * canvasH;
+
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate((overlay.rotation * Math.PI) / 180);
+
+  // Dashed selection border
+  ctx.strokeStyle = '#CDFF48';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(-w / 2, -h / 2, w, h);
+  ctx.setLineDash([]);
+
+  const btnR = 12;
+
+  // Delete button (top-left)
+  const delX = -w / 2;
+  const delY = -h / 2;
+  ctx.beginPath();
+  ctx.arc(delX, delY, btnR, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  const cs = 5;
+  ctx.beginPath();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.moveTo(delX - cs, delY - cs);
+  ctx.lineTo(delX + cs, delY + cs);
+  ctx.moveTo(delX + cs, delY - cs);
+  ctx.lineTo(delX - cs, delY + cs);
+  ctx.stroke();
+
+  // Rotate handle (bottom-right)
+  const rotX = w / 2;
+  const rotY = h / 2;
+  ctx.beginPath();
+  ctx.arc(rotX, rotY, btnR, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.arc(rotX, rotY, 5, -Math.PI * 0.8, Math.PI * 0.5);
+  ctx.stroke();
+
+  // Resize handle (top-right)
+  const hs = 10;
+  ctx.fillStyle = '#CDFF48';
+  ctx.strokeStyle = '#0B0B0B';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.roundRect(w / 2 - hs / 2, -h / 2 - hs / 2, hs, hs, 3);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 function setupInputHandlers(canvasEl: HTMLCanvasElement): void {
   let isPointerDown = false;
 
@@ -430,7 +650,7 @@ function setupInputHandlers(canvasEl: HTMLCanvasElement): void {
 
   canvasEl.addEventListener('pointerdown', (e) => {
     // Retry/cancel segmentation on tap
-    if (state.effectMode === 'partial' && state.partial.target === 'auto') {
+    if (state.effectMode === 'partial') {
       if (state.subjectError) {
         updateState({ subjectError: null, subjectMask: null, subjectLoading: false });
         return;
@@ -455,12 +675,12 @@ function setupInputHandlers(canvasEl: HTMLCanvasElement): void {
   canvasEl.addEventListener('pointercancel', () => { isPointerDown = false; });
 
   canvasEl.addEventListener('touchstart', (e) => {
-    if (state.activeTool === 'sticker' || e.touches.length > 1 || state.brushActive || state.eraserActive) {
+    if (state.activeTool === 'sticker' || e.touches.length > 1 || state.eraserActive) {
       e.preventDefault();
     }
   }, { passive: false });
   canvasEl.addEventListener('touchmove', (e) => {
-    if (state.activeTool === 'sticker' || e.touches.length > 1 || state.brushActive || state.eraserActive) {
+    if (state.activeTool === 'sticker' || e.touches.length > 1 || state.eraserActive) {
       e.preventDefault();
     }
   }, { passive: false });
@@ -468,9 +688,7 @@ function setupInputHandlers(canvasEl: HTMLCanvasElement): void {
   function handleInteraction(e: PointerEvent): void {
     const pos = getCanvasPos(e);
 
-    if (state.effectMode === 'partial' && state.partial.target === 'brush' && state.brushActive) {
-      applyBrush(pos.x, pos.y, currentDrawArea);
-    } else if (state.eraserActive && (state.effectMode === 'partial' || state.effectMode === 'full')) {
+    if (state.eraserActive && state.effectMode === 'partial') {
       applyEraser(pos.x, pos.y, currentDrawArea);
     }
   }

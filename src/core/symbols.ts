@@ -54,7 +54,6 @@ export function renderSymbolsGrid(
     symbolSetId: string;
     opacity: number;
     size?: number;    // 50-200, font size as % (default 100)
-    glow?: number;    // 0-40, shadowBlur
   },
   drawArea: DrawArea,
   mask: boolean[] | null,
@@ -64,7 +63,9 @@ export function renderSymbolsGrid(
   const symbols = symbolSet.symbols;
   const spacing = mapDensityToSpacing(config.density, drawArea.w);
   const cols = Math.floor(drawArea.w / spacing);
-  const rows = Math.floor(drawArea.h / spacing);
+  // Use 1.8x vertical spacing to match ASCII mode's coverage area
+  const rowSpacing = spacing * 1.8;
+  const rows = Math.floor(drawArea.h / rowSpacing);
 
   if (cols <= 0 || rows <= 0) return;
 
@@ -79,18 +80,10 @@ export function renderSymbolsGrid(
 
   const sizeScale = (config.size || 100) / 100;
   const fontSize = spacing * 0.7 * sizeScale;
-  ctx.font = `${fontSize}px "IBM Plex Mono", monospace`;
+  ctx.font = `${fontSize}px "JetBrains Mono", monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.globalAlpha = config.opacity / 100;
-
-  // Glow — always white for visibility
-  if (config.glow && config.glow > 0) {
-    ctx.shadowBlur = config.glow;
-    ctx.shadowColor = '#ffffff';
-  } else {
-    ctx.shadowBlur = 0;
-  }
 
   const random = rng(42);
 
@@ -123,19 +116,19 @@ export function renderSymbolsGrid(
 
       // Draw symbol at grid position
       const cx = drawArea.x + col * spacing + spacing / 2;
-      const cy = drawArea.y + row * spacing + spacing / 2;
+      const cy = drawArea.y + row * rowSpacing + rowSpacing / 2;
       ctx.fillText(symbol, cx, cy);
     }
   }
 
   ctx.globalAlpha = 1;
-  ctx.shadowBlur = 0;
 }
 
-/** Get grid dimensions for symbols (uniform square grid) */
+/** Get grid dimensions for symbols (adjusted vertical spacing) */
 export function getSymbolGridDimensions(density: number, drawArea: DrawArea): { cols: number; rows: number } {
   const spacing = mapDensityToSpacing(density, drawArea.w);
   const cols = Math.floor(drawArea.w / spacing);
-  const rows = Math.floor(drawArea.h / spacing);
+  const rowSpacing = spacing * 1.8;
+  const rows = Math.floor(drawArea.h / rowSpacing);
   return { cols, rows };
 }
