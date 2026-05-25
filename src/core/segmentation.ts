@@ -1,5 +1,5 @@
-// === Trace — Segmentation (hybrid: server API for mobile, local WASM for desktop) ===
-// Optimized: downscale before inference, medium model, compact mask resolution.
+// === Trace — Segmentation (local WASM, works on all devices including mobile) ===
+// Uses @imgly/background-removal running entirely in the browser.
 
 import { removeBackground } from '@imgly/background-removal';
 
@@ -7,8 +7,6 @@ let cachedMask: boolean[] | null = null;
 let cachedImageSrc: string | null = null;
 let cachedCols = 0;
 let cachedRows = 0;
-
-const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
 
 // Max image dimension sent to the model — larger is wasted compute
 const MAX_INPUT_DIM = 1024;
@@ -22,9 +20,7 @@ export async function segmentSubject(
     return cachedMask;
   }
 
-  const mask = isMobile
-    ? await segmentViaServer(image, cols, rows)
-    : await segmentLocal(image, cols, rows);
+  const mask = await segmentLocal(image, cols, rows);
 
   cachedMask = mask;
   cachedImageSrc = image.src;
@@ -33,61 +29,29 @@ export async function segmentSubject(
   return mask;
 }
 
-// === Server-side segmentation (mobile) ===
-async function segmentViaServer(
-  image: HTMLImageElement,
-  cols: number,
-  rows: number
-): Promise<boolean[]> {
-  console.log('[Trace] Using server-side segmentation...');
-
-  // Downscale before sending to server
-  const blob = await imageToBlob(image, MAX_INPUT_DIM);
-  console.log(`[Trace] Sending ${(blob.size / 1024).toFixed(0)}KB to server`);
-
-  const res = await fetch(`/api/segment?cols=${cols}&rows=${rows}`, {
-    method: 'POST',
-    body: blob,
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: '服务端识别失败' }));
-    throw new Error(err.error || `HTTP ${res.status}`);
-  }
-
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    const data = await res.json();
-    return data.mask as boolean[];
-  } else {
-    const resultBlob = await res.blob();
-    return decodeMaskFromPng(resultBlob, cols, rows);
-  }
-}
-
-// === Local WASM segmentation (desktop) ===
+// === Local WASM segmentation (works on all devices) ===
 async function segmentLocal(
   image: HTMLImageElement,
   cols: number,
   rows: number
 ): Promise<boolean[]> {
-  console.log('[Trace] Using local WASM segmentation...');
+  console.log('[pixpic] Running segmentation in browser...');
 
   // Downscale before model inference — huge speedup
   const blob = await imageToBlob(image, MAX_INPUT_DIM);
-  console.log(`[Trace] Input image: ${(blob.size / 1024).toFixed(0)}KB`);
+  console.log(`[pixpic] Input image: ${(blob.size / 1024).toFixed(0)}KB`);
 
   const t0 = performance.now();
 
   const resultBlob = await removeBackground(blob, {
-    model: 'medium' as any,  // isnet_fp16 — good balance of speed & quality
+    model: 'medium' as any,
     device: 'cpu',
     progress: (key: string, current: number, total: number) => {
-      console.log(`[Trace segmentation] ${key}: ${current}/${total}`);
+      console.log(`[pixpic segmentation] ${key}: ${current}/${total}`);
     }
   });
 
-  console.log(`[Trace] Segmentation done in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+  console.log(`[pixpic] Segmentation done in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
   return decodeMaskFromPng(resultBlob, cols, rows);
 }
@@ -99,7 +63,6 @@ async function imageToBlob(image: HTMLImageElement, maxDim: number): Promise<Blo
   let w = image.naturalWidth;
   let h = image.naturalHeight;
 
-  // Downscale if needed
   if (Math.max(w, h) > maxDim) {
     const scale = maxDim / Math.max(w, h);
     w = Math.round(w * scale);
@@ -116,7 +79,7 @@ async function imageToBlob(image: HTMLImageElement, maxDim: number): Promise<Blo
     canvas.toBlob((b) => {
       if (b) resolve(b);
       else reject(new Error('无法转换图片'));
-    }, 'image/jpeg', 0.85);  // JPEG is much smaller than PNG
+    }, 'image/jpeg', 0.85);
   });
 }
 
