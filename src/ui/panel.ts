@@ -690,7 +690,6 @@ function renderOtherParamsTab(container: HTMLElement): void {
 
   // All sliders visible at once
   paramsWrapper.appendChild(createSlider('密度', 10, 80, state.partial.density, 1, (v) => {
-    updateState({ subjectMask: null });
     updatePartial({ density: v });
   }));
 
@@ -834,7 +833,6 @@ function renderCanvasContent(container: HTMLElement): void {
       photoX: 0.5,
       photoY: 0.5,
       photoScale: 1,
-      subjectMask: null,
       eraserMask: null,
     });
   }));

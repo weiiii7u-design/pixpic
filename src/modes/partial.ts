@@ -215,8 +215,7 @@ function renderMonoColorAscii(
       const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 
       const charIdx = Math.floor(lum * (chars.length - 1));
-      const char = chars[charIdx] || ' ';
-      if (char === ' ') continue;
+      const char = chars[charIdx] || '.';
 
       const cx = drawArea.x + col * cellW + cellW / 2;
       const cy = drawArea.y + row * cellH + cellH / 2;

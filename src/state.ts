@@ -27,7 +27,7 @@ export const state: AppState = {
     charset: 'standard',
     symbolSetId: 'tech',
     invert: false,
-    segEnabled: true,
+    segEnabled: false,
     bgImageEnabled: true,
   },
 

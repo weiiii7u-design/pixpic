@@ -19,12 +19,12 @@ export interface AsciiConfig {
 }
 
 const CHARSETS: Record<CharsetName, string> = {
-  standard: ' .:-=+*#%@',
-  shades: ' .░▒▓█',
-  dots: ' ·•●○◌◎',
-  steps: ' ▁▂▃▄▅▆▇█',
-  numbers: ' 0123456789',
-  complex: " .'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuv",
+  standard: '.:-=+*#%@',
+  shades: '.░▒▓█',
+  dots: '·•●○◌◎',
+  steps: '▁▂▃▄▅▆▇█',
+  numbers: '0123456789',
+  complex: ".'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuv",
 };
 
 export function getCharset(name: CharsetName): string {
