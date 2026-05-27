@@ -5,11 +5,11 @@ import type { SymbolSet } from '../types';
 import { rng } from './math';
 
 export const SYMBOL_SETS: SymbolSet[] = [
-  { id: 'tech', name: '科技', symbols: ['✦', '+', '○', '×', '·', '★'] },
-  { id: 'nature', name: '自然', symbols: ['✿', '❀', '✾', '❁', '✻', '·'] },
-  { id: 'minimal', name: '极简', symbols: ['·', '•', '○', '◦'] },
-  { id: 'geo', name: '几何', symbols: ['△', '□', '○', '◇', '×', '+'] },
-  { id: 'stars', name: '星辰', symbols: ['✦', '✧', '★', '☆', '✶', '·'] },
+  { id: 'tech', name: '科技', symbols: ['·', '×', '+', '○', '✦', '★'] },
+  { id: 'nature', name: '自然', symbols: ['·', '✻', '✾', '❁', '❀', '✿'] },
+  { id: 'minimal', name: '极简', symbols: ['◦', '·', '•', '○'] },
+  { id: 'geo', name: '几何', symbols: ['+', '×', '◇', '○', '□', '△'] },
+  { id: 'stars', name: '星辰', symbols: ['·', '✧', '☆', '✶', '✦', '★'] },
 ];
 
 export function getSymbolSet(id: string): SymbolSet {
@@ -101,8 +101,10 @@ export function renderSymbolsGrid(
       const g = pixels[pixIdx + 1];
       const b = pixels[pixIdx + 2];
 
-      // Pick random symbol
-      const symbol = symbols[Math.floor(random() * symbols.length)];
+      // Map brightness to symbol index (same as ASCII logic)
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      const symIdx = Math.floor(lum * (symbols.length - 1));
+      const symbol = symbols[symIdx];
 
       // Pick color
       const color = getColorForPixel(

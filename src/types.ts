@@ -4,13 +4,14 @@
 export type EditorTool = 'none' | 'adjust' | 'sticker' | 'canvas';
 export type EffectMode = 'off' | 'partial';
 export type AdjustSubTab = 'dots' | 'palette' | 'otherParams';
+export type CanvasSubTab = 'ratio' | 'palette';
 
 // --- Partial Effect ---
 export type EffectType = 'ascii' | 'symbols';
 
 // --- Shared ---
 export type ColorMode = 'original' | 'mono' | 'multi';
-export type CharsetName = 'standard' | 'shades' | 'dots' | 'steps' | 'numbers' | 'complex';
+export type CharsetName = 'standard' | 'shades' | 'dots' | 'steps' | 'numbers' | 'complex' | 'custom';
 export type CanvasRatio = 'original' | '1:1' | '4:5' | '3:4' | '9:16' | '16:9' | '4:3';
 
 // --- Symbol Sets ---
@@ -31,6 +32,7 @@ export interface PartialConfig {
   glow: number;
   opacity: number;
   charset: CharsetName;
+  customCharset: string;
   symbolSetId: string;
   invert: boolean;
   segEnabled: boolean;
@@ -82,6 +84,7 @@ export interface AppState {
   activeTool: EditorTool;
   effectMode: EffectMode;
   adjustSubTab: AdjustSubTab;
+  canvasSubTab: CanvasSubTab;
 
   sourceImage: HTMLImageElement | null;
   imageFileName: string;

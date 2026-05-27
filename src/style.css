@@ -262,7 +262,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  max-height: 350px;
+  max-height: 240px;
   opacity: 1;
   transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1),
               opacity 0.25s ease;
@@ -279,8 +279,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 16px 24px 10px;
-  min-height: 52px;
+  padding: 12px 24px 6px;
+  min-height: 44px;
 }
 
 .action-bar:has(.action-add-sticker-btn) {
@@ -449,14 +449,15 @@ body {
 
 /* ===== Panel Content ===== */
 .panel-content {
-  padding: 14px 24px 16px;
+  padding: 10px 24px 12px;
   overflow-y: auto;
-  flex: 1;
+  flex: 0 0 120px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   -webkit-overflow-scrolling: touch;
-  max-height: 200px;
+  height: 120px;
+  max-height: 120px;
 }
 
 /* ===== Bottom Toolbar ===== */
@@ -1034,6 +1035,97 @@ body {
   animation: pulse 1.5s ease-in-out infinite;
 }
 
+/* === Custom Charset Input === */
+.custom-charset-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.custom-charset-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+  background: var(--surface);
+}
+
+.custom-charset-input:focus {
+  border-color: var(--accent, #c8e64a);
+}
+
+.custom-charset-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  font-size: 0.9rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.custom-charset-btn.confirm {
+  background: var(--accent, #c8e64a);
+  color: #000;
+}
+
+.custom-charset-btn.clear {
+  background: rgba(0, 0, 0, 0.08);
+  color: #666;
+}
+
+.custom-charset-btn:active {
+  transform: scale(0.9);
+}
+
+.custom-charset-hint {
+  font-size: 0.7rem;
+  color: #f59e0b;
+  margin-top: 4px;
+}
+
+/* === Palette Flat Layout === */
+.palette-flat-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.palette-flat-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.palette-flat-label {
+  font-size: 0.65rem;
+  color: #999;
+  min-width: 48px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.palette-flat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.palette-flat-extras {
+  padding-top: 6px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  margin-top: 2px;
+  padding-left: 58px;
+}
+
 /* === Scrollbar === */
 .panel-content::-webkit-scrollbar {
   width: 0;
@@ -1049,7 +1141,9 @@ body {
 
 @media (max-height: 700px) {
   .panel-content {
-    max-height: 150px;
+    height: 100px;
+    max-height: 100px;
+    flex: 0 0 100px;
   }
 }
 

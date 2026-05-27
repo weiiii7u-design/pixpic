@@ -1,6 +1,7 @@
 // === PixPic — Global Reactive State ===
 
 import type { AppState, PartialConfig, CanvasRatio, OverlayInstance } from './types';
+import type { CanvasSubTab } from './types';
 
 type Listener = () => void;
 
@@ -11,6 +12,7 @@ export const state: AppState = {
   activeTool: 'none',
   effectMode: 'off',
   adjustSubTab: 'dots',
+  canvasSubTab: 'ratio' as CanvasSubTab,
 
   sourceImage: null,
   imageFileName: '',
@@ -25,6 +27,7 @@ export const state: AppState = {
     glow: 0,
     opacity: 100,
     charset: 'standard',
+    customCharset: '',
     symbolSetId: 'tech',
     invert: false,
     segEnabled: false,

@@ -180,7 +180,7 @@ function renderMonoColorAscii(
   mask: boolean[] | null
 ): void {
   const { partial } = state;
-  const chars = getCharset(partial.charset);
+  const chars = getCharset(partial.charset, partial.customCharset);
 
   const cols = partial.density;
   const cellW = drawArea.w / cols;
@@ -235,7 +235,7 @@ function renderMultiColorAscii(
 ): void {
   const { partial } = state;
   const palette = getPalette(partial.palette);
-  const chars = getCharset(partial.charset);
+  const chars = getCharset(partial.charset, partial.customCharset);
 
   const cols = partial.density;
   const cellW = drawArea.w / cols;

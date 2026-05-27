@@ -14,11 +14,12 @@ export interface AsciiConfig {
   threshold: number;     // 0-255
   gamma: number;         // 0.1 to 3.0
   charset: CharsetName;
+  customCharset?: string;
   colorMode: AsciiColorMode;
   invert: boolean;
 }
 
-const CHARSETS: Record<CharsetName, string> = {
+const CHARSETS: Record<Exclude<CharsetName, 'custom'>, string> = {
   standard: '.:-=+*#%@',
   shades: '.░▒▓█',
   dots: '·•●○◌◎',
@@ -27,7 +28,12 @@ const CHARSETS: Record<CharsetName, string> = {
   complex: ".'`^\",:;Il!i><~+_-?][}{1)(|/tfjrxnuv",
 };
 
-export function getCharset(name: CharsetName): string {
+export function getCharset(name: CharsetName, customCharset?: string): string {
+  if (name === 'custom') {
+    // Need at least 2 unique chars for brightness mapping to work
+    if (customCharset && customCharset.length >= 2) return customCharset;
+    return CHARSETS.standard; // fallback
+  }
   return CHARSETS[name];
 }
 
@@ -61,9 +67,9 @@ export function renderAsciiRegion(
   config: AsciiConfig,
   drawArea: DrawArea
 ): void {
-  const { density, size, brightness, contrast, threshold, gamma, charset, colorMode, invert } = config;
+  const { density, size, brightness, contrast, threshold, gamma, charset, customCharset, colorMode, invert } = config;
   const sizeScale = (size || 100) / 100;
-  const chars = getCharset(charset);
+  const chars = getCharset(charset, customCharset);
 
   const cols = density;
   const cellW = drawArea.w / cols;

@@ -2,7 +2,7 @@
 
 import { el, clearEl } from './dom';
 import { state, updateState, updatePartial } from '../state';
-import type { CanvasRatio, StickerMode, EditorTool, AdjustSubTab, OverlayShape, OverlayInstance } from '../types';
+import type { CanvasRatio, StickerMode, EditorTool, AdjustSubTab, CanvasSubTab, OverlayShape, OverlayInstance } from '../types';
 import { createSlider, createToggle, createChipGroup, createButton } from './controls';
 import { triggerSegmentation } from '../modes/partial';
 import {
@@ -245,6 +245,11 @@ const ADJUST_SUBTABS: { id: AdjustSubTab; label: string }[] = [
   { id: 'otherParams', label: '其他参数' },
 ];
 
+const CANVAS_SUBTABS: { id: CanvasSubTab; label: string }[] = [
+  { id: 'ratio', label: '比例' },
+  { id: 'palette', label: '色板' },
+];
+
 // === Undo/Redo History ===
 let undoStack: any[] = [];
 let redoStack: any[] = [];
@@ -442,6 +447,18 @@ export function renderPanelContent(panelWrapper: HTMLElement): void {
         btn.textContent = tab.label;
         btn.addEventListener('click', () => {
           updateState({ overlayEditTab: tab.id });
+        });
+        subtabs.appendChild(btn);
+      }
+    } else {
+      // Normal canvas mode: "比例" | "色板" tabs
+      for (const tab of CANVAS_SUBTABS) {
+        const btn = el('button', {
+          className: `panel-subtab ${state.canvasSubTab === tab.id ? 'active' : ''}`,
+        });
+        btn.textContent = tab.label;
+        btn.addEventListener('click', () => {
+          updateState({ canvasSubTab: tab.id });
         });
         subtabs.appendChild(btn);
       }
@@ -818,37 +835,35 @@ function renderCanvasContent(container: HTMLElement): void {
     return;
   }
 
-  // Normal canvas mode
-  container.appendChild(createChipGroup('画布比例', [
-    { value: 'original', label: '原始' },
-    { value: '1:1', label: '1:1' },
-    { value: '4:5', label: '4:5' },
-    { value: '3:4', label: '3:4' },
-    { value: '9:16', label: '9:16' },
-    { value: '16:9', label: '16:9' },
-    { value: '4:3', label: '4:3' },
-  ], state.canvasRatio, (v) => {
-    updateState({
-      canvasRatio: v as CanvasRatio,
-      photoX: 0.5,
-      photoY: 0.5,
-      photoScale: 1,
-      eraserMask: null,
-    });
-  }));
-
-  if (state.canvasRatio !== 'original') {
-    container.appendChild(createChipGroup('背景色板', [
-      { value: 'photo', label: '原图选色' },
-      { value: 'dream', label: '千禧梦境' },
-      { value: 'happy', label: '开心五彩' },
-      { value: 'nature', label: '自然色系' },
-      { value: 'neon', label: '亚比荧光' },
-    ], state.canvasBgPalette, (v) => {
-      updateState({ canvasBgPalette: v, canvasBgColor: '' });
+  // Normal canvas mode — render based on active sub-tab
+  if (state.canvasSubTab === 'ratio') {
+    container.appendChild(createChipGroup('', [
+      { value: 'original', label: '原始' },
+      { value: '1:1', label: '1:1' },
+      { value: '4:5', label: '4:5' },
+      { value: '3:4', label: '3:4' },
+      { value: '9:16', label: '9:16' },
+      { value: '16:9', label: '16:9' },
+      { value: '4:3', label: '4:3' },
+    ], state.canvasRatio, (v) => {
+      updateState({
+        canvasRatio: v as CanvasRatio,
+        photoX: 0.5,
+        photoY: 0.5,
+        photoScale: 1,
+        eraserMask: null,
+      });
     }));
-
-    container.appendChild(renderCanvasBgSwatches());
+  } else if (state.canvasSubTab === 'palette') {
+    if (state.canvasRatio !== 'original') {
+      container.appendChild(renderCanvasBgFlat());
+    } else {
+      const hint = el('p', { className: 'hint-text' }, ['请先选择非原始比例以使用背景色板']);
+      hint.style.color = '#999';
+      hint.style.textAlign = 'center';
+      hint.style.padding = '20px 0';
+      container.appendChild(hint);
+    }
   }
 }
 
@@ -868,6 +883,7 @@ const STYLE_OPTIONS: StyleOption[] = [
   { id: 'minimal', type: 'symbols', name: '极简', preview: '· • ○ ◦' },
   { id: 'geo', type: 'symbols', name: '几何', preview: '△□○◇×+' },
   { id: 'stars', type: 'symbols', name: '星辰', preview: '✦✧★☆✶·' },
+  { id: 'custom', type: 'ascii', name: '自定义', preview: 'Aa✎' },
 ];
 
 function getCurrentStyleId(): string {
@@ -907,6 +923,63 @@ function renderStyleGrid(): HTMLElement {
   }
 
   wrapper.appendChild(grid);
+
+  // Show custom input area when "自定义" is selected
+  if (currentId === 'custom') {
+    const inputRow = el('div', { className: 'custom-charset-input-row' });
+    const input = el('input', {
+      type: 'text',
+      className: 'custom-charset-input',
+      placeholder: '输入你的文字，如：我爱你、hello',
+      value: state.partial.customCharset,
+    }) as HTMLInputElement;
+
+    // Confirm button
+    const confirmBtn = el('button', { className: 'custom-charset-btn confirm' }, ['✓']);
+    confirmBtn.addEventListener('click', () => {
+      const value = input.value.trim();
+      if (value.length >= 2) {
+        updatePartial({ customCharset: value });
+      }
+    });
+
+    // Delete/clear button
+    const clearBtn = el('button', { className: 'custom-charset-btn clear' }, ['✕']);
+    clearBtn.addEventListener('click', () => {
+      input.value = '';
+      updatePartial({ customCharset: '' });
+    });
+
+    // Enter key to confirm
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const value = input.value.trim();
+        if (value.length >= 2) {
+          updatePartial({ customCharset: value });
+        }
+      }
+    });
+
+    // Prevent panel re-render from stealing focus
+    input.addEventListener('focus', () => {
+      input.dataset.focused = 'true';
+    });
+
+    inputRow.appendChild(input);
+    inputRow.appendChild(confirmBtn);
+    inputRow.appendChild(clearBtn);
+
+    // Hint
+    if (state.partial.customCharset && state.partial.customCharset.length === 1) {
+      const hint = el('div', { className: 'custom-charset-hint' }, ['至少输入2个字符']);
+      wrapper.appendChild(inputRow);
+      wrapper.appendChild(hint);
+    } else {
+      wrapper.appendChild(inputRow);
+    }
+  }
+
   return wrapper;
 }
 
@@ -1145,42 +1218,39 @@ function applyCanvasBgColor(color: string): void {
   updateState({ canvasBgColor: color });
 }
 
-function renderCanvasBgSwatches(): HTMLElement {
-  const wrapper = el('div', { className: 'color-swatches-wrapper' });
+function renderCanvasBgFlat(): HTMLElement {
+  const wrapper = el('div', { className: 'palette-flat-wrapper' });
 
-  let paletteColors: string[];
-  if (state.canvasBgPalette === 'photo') {
-    const img = state.sourceImage;
-    paletteColors = img ? extractPhotoPalette(img) : ['#888888', '#AAAAAA', '#666666', '#BBBBBB', '#999999', '#777777'];
-  } else {
-    const palette = COLOR_PALETTES.find(p => p.id === state.canvasBgPalette);
-    paletteColors = palette ? palette.colors : COLOR_PALETTES[0].colors;
+  // Photo palette group
+  const photoColors = state.sourceImage
+    ? extractPhotoPalette(state.sourceImage)
+    : ['#888888', '#AAAAAA', '#666666', '#BBBBBB', '#999999', '#777777'];
+  wrapper.appendChild(renderPaletteGroup('原图选色', 'photo', photoColors));
+
+  // Preset palette groups
+  for (const palette of COLOR_PALETTES) {
+    wrapper.appendChild(renderPaletteGroup(palette.name, palette.id, palette.colors));
   }
 
-  const row = el('div', { className: 'color-swatch-row' });
-
-  for (const color of paletteColors) {
-    const swatch = el('button', { className: `color-swatch ${state.canvasBgColor === color ? 'active' : ''}` });
-    swatch.style.background = color;
-    swatch.addEventListener('click', () => applyCanvasBgColor(color));
-    row.appendChild(swatch);
-  }
+  // Divider + black/white/custom
+  const extras = el('div', { className: 'palette-flat-group palette-flat-extras' });
+  const extrasRow = el('div', { className: 'palette-flat-row' });
 
   const black = el('button', { className: `color-swatch ${state.canvasBgColor === '#000000' ? 'active' : ''}` });
   black.style.background = '#000000';
-  black.addEventListener('click', () => applyCanvasBgColor('#000000'));
-  row.appendChild(black);
+  black.addEventListener('click', () => { updateState({ canvasBgPalette: 'custom', canvasBgColor: '#000000' }); });
+  extrasRow.appendChild(black);
 
   const white = el('button', { className: `color-swatch color-swatch-border ${state.canvasBgColor === '#ffffff' ? 'active' : ''}` });
   white.style.background = '#ffffff';
-  white.addEventListener('click', () => applyCanvasBgColor('#ffffff'));
-  row.appendChild(white);
+  white.addEventListener('click', () => { updateState({ canvasBgPalette: 'custom', canvasBgColor: '#ffffff' }); });
+  extrasRow.appendChild(white);
 
   for (const color of state.customColors) {
     const swatch = el('button', { className: `color-swatch ${state.canvasBgColor === color ? 'active' : ''}` });
     swatch.style.background = color;
-    swatch.addEventListener('click', () => applyCanvasBgColor(color));
-    row.appendChild(swatch);
+    swatch.addEventListener('click', () => { updateState({ canvasBgPalette: 'custom', canvasBgColor: color }); });
+    extrasRow.appendChild(swatch);
   }
 
   const addBtn = el('button', { className: 'color-swatch color-swatch-add' }, ['+']);
@@ -1196,10 +1266,31 @@ function renderCanvasBgSwatches(): HTMLElement {
       updateState({ customColors: [...state.customColors, v] });
     }
   });
-  row.appendChild(addBtn);
+  extrasRow.appendChild(addBtn);
 
-  wrapper.appendChild(row);
+  extras.appendChild(extrasRow);
+  wrapper.appendChild(extras);
   return wrapper;
+}
+
+function renderPaletteGroup(label: string, paletteId: string, colors: string[]): HTMLElement {
+  const group = el('div', { className: 'palette-flat-group' });
+  const labelEl = el('span', { className: 'palette-flat-label' }, [label]);
+  const row = el('div', { className: 'palette-flat-row' });
+
+  for (const color of colors) {
+    const isActive = state.canvasBgColor === color && state.canvasBgPalette === paletteId;
+    const swatch = el('button', { className: `color-swatch ${isActive ? 'active' : ''}` });
+    swatch.style.background = color;
+    swatch.addEventListener('click', () => {
+      updateState({ canvasBgPalette: paletteId, canvasBgColor: color });
+    });
+    row.appendChild(swatch);
+  }
+
+  group.appendChild(labelEl);
+  group.appendChild(row);
+  return group;
 }
 
 // ===== HELPER: Add Sticker =====
