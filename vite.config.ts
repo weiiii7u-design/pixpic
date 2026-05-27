@@ -18,11 +18,11 @@ export default defineConfig({
         background_color: '#F5F3EE',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: '/',
+        start_url: '/pixpic/',
         icons: [
-          { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
-          { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: '/pixpic/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/pixpic/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: '/pixpic/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {
