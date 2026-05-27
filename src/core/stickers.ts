@@ -92,8 +92,18 @@ let library: StickerAsset[] = [];
 let libraryReady = false;
 
 // Caches
+const EFFECT_CACHE_MAX = 50;
 const effectCache = new Map<string, HTMLCanvasElement>();
 const previewCache = new Map<string, string>();
+
+function effectCacheSet(key: string, value: HTMLCanvasElement): void {
+  // LRU eviction: delete oldest entries when over limit
+  if (effectCache.size >= EFFECT_CACHE_MAX) {
+    const firstKey = effectCache.keys().next().value;
+    if (firstKey !== undefined) effectCache.delete(firstKey);
+  }
+  effectCache.set(key, value);
+}
 
 // === Init ===
 
@@ -403,7 +413,12 @@ export function createEffectCanvas(
   const height = Math.max(24, Math.round(displayHeight));
   const key = `${image.src}-${color}-${mode}-${width}x${height}`;
   const cached = effectCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    // LRU: move to end (most recently used)
+    effectCache.delete(key);
+    effectCache.set(key, cached);
+    return cached;
+  }
 
   // Sample alpha from sticker image
   const maskCanvas = document.createElement('canvas');
@@ -473,7 +488,7 @@ export function createEffectCanvas(
   }
 
   out.globalAlpha = 1;
-  effectCache.set(key, output);
+  effectCacheSet(key, output);
   return output;
 }
 

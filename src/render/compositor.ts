@@ -1,6 +1,6 @@
 // === PixPic — Main Render Compositor (v4: Canvas Ratio + Photo Transform) ===
 
-import { state, updateState } from '../state';
+import { state, updateState, subscribe } from '../state';
 import { renderPartialMode } from '../modes/partial';
 import { renderStampMode } from '../modes/stamp';
 import { applyEraser } from '../tools/eraser';
@@ -10,6 +10,7 @@ import type { DrawArea, CanvasRatio, OverlayShape, OverlayInstance } from '../ty
 let canvas: HTMLCanvasElement | null = null;
 let ctx: CanvasRenderingContext2D | null = null;
 let animFrame = 0;
+let renderDirty = true;
 let currentDrawArea: DrawArea = { x: 0, y: 0, w: 0, h: 0 };
 let currentCanvasW = 0;
 let currentCanvasH = 0;
@@ -165,9 +166,15 @@ export function render(): void {
 
   canvas.style.width = `${canvasW}px`;
   canvas.style.height = `${canvasH}px`;
-  canvas.width = Math.floor(canvasW * dpr);
-  canvas.height = Math.floor(canvasH * dpr);
-  ctx.scale(dpr, dpr);
+  const newW = Math.floor(canvasW * dpr);
+  const newH = Math.floor(canvasH * dpr);
+  if (canvas.width !== newW || canvas.height !== newH) {
+    canvas.width = newW;
+    canvas.height = newH;
+  } else {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   currentCanvasW = canvasW;
   currentCanvasH = canvasH;
@@ -258,11 +265,21 @@ export function render(): void {
 }
 
 export function startRenderLoop(): void {
+  subscribe(() => { renderDirty = true; });
+  window.addEventListener('resize', () => { renderDirty = true; });
   function loop(): void {
-    render();
+    if (renderDirty) {
+      renderDirty = false;
+      render();
+    }
     animFrame = requestAnimationFrame(loop);
   }
   loop();
+}
+
+/** Mark render as dirty (call from gesture handlers etc.) */
+export function markDirty(): void {
+  renderDirty = true;
 }
 
 export function stopRenderLoop(): void {
