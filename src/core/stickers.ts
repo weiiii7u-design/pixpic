@@ -98,14 +98,15 @@ const previewCache = new Map<string, string>();
 // === Init ===
 
 export async function initStickers(): Promise<void> {
+  const base = import.meta.env.BASE_URL;
   try {
-    const res = await fetch('/stickers/manifest.json');
+    const res = await fetch(`${base}stickers/manifest.json`);
     const manifest: { id: string; category: string; filename: string }[] = await res.json();
 
     // Load images individually — don't let one failure block all
     const results = await Promise.allSettled(
       manifest.map(async (item) => {
-        const url = `/stickers/${encodeURIComponent(item.category)}/${encodeURIComponent(item.filename)}`;
+        const url = `${base}stickers/${encodeURIComponent(item.category)}/${encodeURIComponent(item.filename)}`;
         const image = await loadImage(url);
         const numStr = item.id.replace('asset-', '');
         return {

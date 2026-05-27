@@ -3,12 +3,14 @@
 import { el } from './dom';
 import { updateState } from '../state';
 
+const BASE = import.meta.env.BASE_URL;
+
 const SHOWCASE_IMAGES = [
-  '/showcase/demo1.png',
-  '/showcase/demo2.png',
-  '/showcase/demo3.png',
-  '/showcase/demo4.png',
-  '/showcase/demo5.png',
+  `${BASE}showcase/demo1.png`,
+  `${BASE}showcase/demo2.png`,
+  `${BASE}showcase/demo3.png`,
+  `${BASE}showcase/demo4.png`,
+  `${BASE}showcase/demo5.png`,
 ];
 
 export function createWelcomeScreen(): HTMLElement {
