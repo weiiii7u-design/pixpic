@@ -3,6 +3,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import { segmentationPlugin } from './server/segmentation-plugin';
 
 export default defineConfig({
+  base: '/pixpic/',
   server: { host: true, port: 5174 },
   plugins: [
     segmentationPlugin(),
