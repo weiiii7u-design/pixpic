@@ -1,0 +1,23 @@
+{
+  "name": "pixpic-cli",
+  "version": "1.0.0",
+  "description": "Headless renderer for pixpic - batch ASCII/symbol art generation",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "render": "tsx src/index.ts render",
+    "batch": "tsx src/index.ts batch",
+    "content": "tsx src/index.ts content"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.61",
+    "sharp": "^0.33.0",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0",
+    "@types/node": "^20.0.0"
+  }
+}
