@@ -4,6 +4,22 @@ import type { DrawArea, ColorMode } from '../types';
 import type { SymbolSet } from '../types';
 import { rng } from './math';
 
+// Reusable offscreen canvas for sampling (avoids creating one per frame)
+let _sampleCanvas: HTMLCanvasElement | null = null;
+let _sampleCtx: CanvasRenderingContext2D | null = null;
+
+function getSampleCanvas(w: number, h: number): { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } {
+  if (!_sampleCanvas) {
+    _sampleCanvas = document.createElement('canvas');
+    _sampleCtx = _sampleCanvas.getContext('2d')!;
+  }
+  if (_sampleCanvas.width !== w || _sampleCanvas.height !== h) {
+    _sampleCanvas.width = w;
+    _sampleCanvas.height = h;
+  }
+  return { canvas: _sampleCanvas, ctx: _sampleCtx! };
+}
+
 export const SYMBOL_SETS: SymbolSet[] = [
   { id: 'tech', name: '科技', symbols: ['·', '×', '+', '○', '✦', '★'] },
   { id: 'nature', name: '自然', symbols: ['·', '✻', '✾', '❁', '❀', '✿'] },
@@ -70,10 +86,7 @@ export function renderSymbolsGrid(
   if (cols <= 0 || rows <= 0) return;
 
   // Sample source image for color picking
-  const sampleCanvas = document.createElement('canvas');
-  sampleCanvas.width = cols;
-  sampleCanvas.height = rows;
-  const sCtx = sampleCanvas.getContext('2d')!;
+  const { ctx: sCtx } = getSampleCanvas(cols, rows);
   sCtx.drawImage(sourceImg, 0, 0, cols, rows);
   const imageData = sCtx.getImageData(0, 0, cols, rows);
   const pixels = imageData.data;

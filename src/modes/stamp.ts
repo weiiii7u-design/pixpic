@@ -20,17 +20,19 @@ export function renderStampMode(
   ctx: CanvasRenderingContext2D,
   sourceImg: HTMLImageElement,
   photoRect: DrawArea,
-  sizeScale = 1
+  sizeScale = 1,
+  stickerOverride?: StickerInstance[]
 ): void {
   const dpr = sizeScale === 1 ? (window.devicePixelRatio || 1) : 1;
   const canvasW = ctx.canvas.width / dpr;
   const canvasH = ctx.canvas.height / dpr;
+  const stickers = stickerOverride ?? state.stickers;
 
-  for (const sticker of state.stickers) {
+  for (const sticker of stickers) {
     drawStickerArtwork(ctx, sticker, canvasW, canvasH, sizeScale, sourceImg, photoRect);
   }
 
-  if (sizeScale === 1) {
+  if (sizeScale === 1 && !stickerOverride) {
     const selected = state.stickers.find(s => s.id === state.selectedStickerId);
     if (selected) drawStickerControls(ctx, selected, canvasW, canvasH);
     drawAlignGuides(ctx, canvasW, canvasH);

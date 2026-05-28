@@ -7,6 +7,22 @@ import { segmentSubject } from '../core/segmentation';
 import { getPalette } from '../core/shapes';
 import type { DrawArea } from '../types';
 
+// Reusable offscreen canvas for sampling (avoids GC pressure)
+let _partialSampleCanvas: HTMLCanvasElement | null = null;
+let _partialSampleCtx: CanvasRenderingContext2D | null = null;
+
+function getPartialSampleCanvas(w: number, h: number): CanvasRenderingContext2D {
+  if (!_partialSampleCanvas) {
+    _partialSampleCanvas = document.createElement('canvas');
+    _partialSampleCtx = _partialSampleCanvas.getContext('2d')!;
+  }
+  if (_partialSampleCanvas.width !== w || _partialSampleCanvas.height !== h) {
+    _partialSampleCanvas.width = w;
+    _partialSampleCanvas.height = h;
+  }
+  return _partialSampleCtx!;
+}
+
 // Fixed resolution for subject mask — independent of render grid
 const MASK_RESOLUTION = 320;
 
@@ -187,10 +203,7 @@ function renderMonoColorAscii(
   const cellH = cellW * 1.8;
   const rows = Math.floor(drawArea.h / cellH);
 
-  const sampleCanvas = document.createElement('canvas');
-  sampleCanvas.width = cols;
-  sampleCanvas.height = rows;
-  const sCtx = sampleCanvas.getContext('2d')!;
+  const sCtx = getPartialSampleCanvas(cols, rows);
   sCtx.drawImage(sourceImg, 0, 0, cols, rows);
   const imageData = sCtx.getImageData(0, 0, cols, rows);
   const pixels = imageData.data;
@@ -243,10 +256,7 @@ function renderMultiColorAscii(
   const rows = Math.floor(drawArea.h / cellH);
 
   // Sample image for luminance
-  const sampleCanvas = document.createElement('canvas');
-  sampleCanvas.width = cols;
-  sampleCanvas.height = rows;
-  const sCtx = sampleCanvas.getContext('2d')!;
+  const sCtx = getPartialSampleCanvas(cols, rows);
   sCtx.drawImage(sourceImg, 0, 0, cols, rows);
   const imageData = sCtx.getImageData(0, 0, cols, rows);
   const pixels = imageData.data;

@@ -2,7 +2,7 @@
 
 import { el, clearEl } from './dom';
 import { state, updateState, updatePartial } from '../state';
-import type { CanvasRatio, StickerMode, EditorTool, AdjustSubTab, CanvasSubTab, OverlayShape, OverlayInstance } from '../types';
+import type { CanvasRatio, StickerMode, EditorTool, AdjustSubTab, CanvasSubTab, OverlayShape, OverlayInstance, CharsetName } from '../types';
 import { createSlider, createToggle, createChipGroup, createButton } from './controls';
 import { triggerSegmentation } from '../modes/partial';
 import {
@@ -647,7 +647,7 @@ function randomizeEffect(): void {
   if (randomStyle.type === 'ascii') {
     updatePartial({
       effect: 'ascii',
-      charset: randomStyle.id as any,
+      charset: randomStyle.id,
       palette: randomPalette,
       colorMode: 'multi',
       density: randomDensity,
@@ -868,12 +868,9 @@ function renderCanvasContent(container: HTMLElement): void {
 }
 
 // ===== HELPER: Style Grid =====
-interface StyleOption {
-  id: string;
-  type: 'ascii' | 'symbols';
-  name: string;
-  preview: string;
-}
+type StyleOption =
+  | { id: CharsetName; type: 'ascii'; name: string; preview: string }
+  | { id: string; type: 'symbols'; name: string; preview: string };
 
 const STYLE_OPTIONS: StyleOption[] = [
   { id: 'standard', type: 'ascii', name: '标准', preview: '.:-=+*#%@' },
@@ -909,7 +906,7 @@ function renderStyleGrid(): HTMLElement {
     card.addEventListener('click', () => {
       pushUndo();
       if (style.type === 'ascii') {
-        updatePartial({ effect: 'ascii', charset: style.id as any });
+        updatePartial({ effect: 'ascii', charset: style.id });
       } else {
         updatePartial({ effect: 'symbols', symbolSetId: style.id });
       }

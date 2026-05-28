@@ -240,24 +240,19 @@ export function render(): void {
       offCtx.clearRect(0, 0, canvasW, canvasH);
 
       // Pass 1: non-avoid stickers directly to main ctx
-      const savedStickers = state.stickers;
-      const nonAvoid = savedStickers.filter(s => !s.subjectAvoid);
-      const avoid = savedStickers.filter(s => s.subjectAvoid);
+      const nonAvoid = state.stickers.filter(s => !s.subjectAvoid);
+      const avoid = state.stickers.filter(s => s.subjectAvoid);
 
       if (nonAvoid.length > 0) {
-        state.stickers = nonAvoid;
-        renderStampMode(ctx, img, photoRect, 1);
+        renderStampMode(ctx, img, photoRect, 1, nonAvoid);
       }
 
       // Pass 2: avoid stickers on offscreen, erase subject, composite
       if (avoid.length > 0) {
-        state.stickers = avoid;
-        renderStampMode(offCtx, img, photoRect, 1);
+        renderStampMode(offCtx, img, photoRect, 1, avoid);
         eraseSubjectFromCanvas(offCtx, img, photoRect, canvasW, canvasH);
         ctx.drawImage(offscreenCache!, 0, 0, canvasW, canvasH);
       }
-
-      state.stickers = savedStickers;
     } else {
       renderStampMode(ctx, img, photoRect, 1);
     }
@@ -357,30 +352,25 @@ export function exportCanvas(): void {
     const stickerScale = exportW / refW;
 
     if (hasAnyAvoid) {
-      const savedStickers = state.stickers;
-      const nonAvoid = savedStickers.filter(s => !s.subjectAvoid);
-      const avoid = savedStickers.filter(s => s.subjectAvoid);
+      const nonAvoid = state.stickers.filter(s => !s.subjectAvoid);
+      const avoid = state.stickers.filter(s => s.subjectAvoid);
 
       if (nonAvoid.length > 0) {
-        state.stickers = nonAvoid;
         const sc = document.createElement('canvas');
         sc.width = exportW; sc.height = exportH;
         const sCtx = sc.getContext('2d')!;
-        renderStampMode(sCtx, img, photoRect, stickerScale);
+        renderStampMode(sCtx, img, photoRect, stickerScale, nonAvoid);
         exportCtx.drawImage(sc, 0, 0);
       }
 
       if (avoid.length > 0) {
-        state.stickers = avoid;
         const sc = document.createElement('canvas');
         sc.width = exportW; sc.height = exportH;
         const sCtx = sc.getContext('2d')!;
-        renderStampMode(sCtx, img, photoRect, stickerScale);
+        renderStampMode(sCtx, img, photoRect, stickerScale, avoid);
         eraseSubjectFromCanvas(sCtx, img, photoRect, exportW, exportH);
         exportCtx.drawImage(sc, 0, 0);
       }
-
-      state.stickers = savedStickers;
     } else {
       const stickerCanvas = document.createElement('canvas');
       stickerCanvas.width = exportW;
