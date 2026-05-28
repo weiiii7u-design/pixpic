@@ -116,7 +116,7 @@ export function renderSymbolsGrid(
 
       // Map brightness to symbol index (same as ASCII logic)
       const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-      const symIdx = Math.floor(lum * (symbols.length - 1));
+      const symIdx = Math.min(symbols.length - 1, Math.floor(lum * symbols.length));
       const symbol = symbols[symIdx];
 
       // Pick color
