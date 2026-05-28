@@ -1,7 +1,11 @@
 // === pixpic-cli: Symbol Effect Renderer ===
 
-import { createCanvas, type Canvas } from '@napi-rs/canvas';
+import { createCanvas, GlobalFonts, type Canvas } from '@napi-rs/canvas';
 import type { RenderConfig } from '../types.js';
+
+// Register CJK font
+GlobalFonts.registerFromPath('/System/Library/Fonts/PingFang.ttc', 'PingFang');
+const FONT_FAMILY = 'PingFang, monospace';
 
 // Symbol sets (same as pixpic browser, ordered light→heavy)
 const SYMBOL_SETS: Record<string, string[]> = {
@@ -26,9 +30,15 @@ export function renderSymbols(
   const output = createCanvas(outputW, outputH);
   const ctx = output.getContext('2d');
 
-  // Fill background
-  ctx.fillStyle = config.bgColor;
-  ctx.fillRect(0, 0, outputW, outputH);
+  // Draw background: original image (with dark overlay) or solid color
+  if (config.bgColor === 'image') {
+    ctx.drawImage(sourceCanvas, 0, 0, outputW, outputH);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+    ctx.fillRect(0, 0, outputW, outputH);
+  } else {
+    ctx.fillStyle = config.bgColor;
+    ctx.fillRect(0, 0, outputW, outputH);
+  }
 
   const symbols = SYMBOL_SETS[config.symbolSetId] || SYMBOL_SETS.tech;
   const cols = config.density;
@@ -47,7 +57,7 @@ export function renderSymbols(
 
   const sizeScale = (config.size || 100) / 100;
   const fontSize = spacing * 0.7 * sizeScale;
-  ctx.font = `${fontSize}px monospace`;
+  ctx.font = `${fontSize}px ${FONT_FAMILY}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
