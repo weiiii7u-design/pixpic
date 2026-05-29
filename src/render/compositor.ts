@@ -385,6 +385,19 @@ export function exportCanvas(): void {
   state.selectedStickerId = savedSelectedId;
   state.selectedOverlayId = savedOverlayId;
 
+  // Add watermark
+  const wmSize = Math.max(14, Math.round(exportW * 0.018));
+  exportCtx.save();
+  exportCtx.font = `${wmSize}px "JetBrains Mono", monospace`;
+  exportCtx.textAlign = 'right';
+  exportCtx.textBaseline = 'bottom';
+  exportCtx.globalAlpha = 0.4;
+  exportCtx.fillStyle = '#ffffff';
+  exportCtx.fillText('pixpic', exportW - wmSize * 0.8, exportH - wmSize * 0.6);
+  exportCtx.fillStyle = '#000000';
+  exportCtx.fillText('pixpic', exportW - wmSize * 0.8 - 1, exportH - wmSize * 0.6 - 1);
+  exportCtx.restore();
+
   // Save
   const fileName = `pixpic-${state.imageFileName || 'photo'}.png`;
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);

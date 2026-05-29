@@ -1147,6 +1147,52 @@ body {
   }
 }
 
+/* === Onboarding Tip === */
+.onboarding-tip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  border-radius: 16px;
+  padding: 24px 28px;
+  z-index: 1000;
+  max-width: 300px;
+  text-align: center;
+  backdrop-filter: blur(10px);
+  transition: opacity 0.3s;
+}
+
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+  text-align: left;
+}
+
+.onboarding-step {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.onboarding-step b {
+  color: var(--accent, #c8e64a);
+}
+
+.onboarding-dismiss {
+  background: var(--accent, #c8e64a);
+  color: #000;
+  border: none;
+  border-radius: 20px;
+  padding: 8px 24px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 /* ===== Confirm Dialog (iOS Action Sheet) ===== */
 .confirm-overlay {
   position: absolute;
